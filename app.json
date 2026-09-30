@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "CUTLY",
+    "slug": "cutly",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "cutly",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.cutly.app" },
+    "android": { "package": "com.cutly.app", "adaptiveIcon": { "backgroundColor": "#101112" } },
+    "plugins": ["expo-router", "expo-secure-store", "expo-location"],
+    "experiments": { "typedRoutes": true }
+  }
+}

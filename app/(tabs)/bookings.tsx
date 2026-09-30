@@ -1,0 +1,5 @@
+import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors, spacing, typography } from '@/constants/theme';
+export default function Bookings() { return <SafeAreaView style={styles.safe}><View style={styles.content}><Text style={styles.title}>Your bookings</Text><View style={styles.empty}><Text style={styles.emoji}>✂️</Text><Text style={styles.heading}>Your next cut is waiting</Text><Text style={styles.body}>Bookings you make will show up here. Find a barber who can take you soon.</Text></View></View></SafeAreaView>; }
+const styles = StyleSheet.create({ safe: { flex: 1, backgroundColor: colors.canvas }, content: { padding: spacing.md }, title: { ...typography.display, color: colors.ink }, empty: { alignItems: 'center', marginTop: 140, padding: spacing.xl }, emoji: { fontSize: 42, marginBottom: spacing.md }, heading: { ...typography.heading, color: colors.ink }, body: { ...typography.body, color: colors.muted, textAlign: 'center', marginTop: spacing.sm, maxWidth: 280 } });

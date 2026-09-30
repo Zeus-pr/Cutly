@@ -1,0 +1,15 @@
+import express from 'express';
+import cors from 'cors';
+import { z } from 'zod';
+import { calculateSlots } from './availability';
+import { MockPaymentProvider } from './payment';
+const app = express(); const port = Number(process.env.PORT || 4000); const payment = new MockPaymentProvider();
+app.use(cors()); app.use(express.json());
+app.get('/health', (_req, res) => res.json({ status: 'ok', service: 'cutly-api' }));
+app.get('/api/shops', (_req, res) => res.json({ data: [] }));
+app.get('/api/shops/:id/availability', (req, res) => { const date = String(req.query.date || new Date().toISOString().slice(0, 10)); const start = new Date(`${date}T10:00:00+05:30`); const end = new Date(`${date}T21:00:00+05:30`); const slots = calculateSlots({ shop: { start, end }, barber: { start, end }, bookings: [], durationMinutes: Number(req.query.durationMinutes || 30) }); res.json({ data: slots }); });
+app.post('/api/bookings/hold', (req, res) => { const schema = z.object({ shopId: z.string(), serviceId: z.string(), startsAt: z.string().datetime(), barberId: z.string().optional(), idempotencyKey: z.string().min(8) }); const parsed = schema.safeParse(req.body); if (!parsed.success) return res.status(400).json({ error: 'Invalid booking hold request' }); res.status(201).json({ data: { id: `hold_${Date.now()}`, status: 'HELD', expiresAt: new Date(Date.now() + 5 * 60000).toISOString(), ...parsed.data } }); });
+app.post('/api/payments/create', async (req, res) => { const schema = z.object({ amountPaise: z.number().int().positive(), bookingId: z.string(), idempotencyKey: z.string().min(8) }); const parsed = schema.safeParse(req.body); if (!parsed.success) return res.status(400).json({ error: 'Invalid payment request' }); res.status(201).json({ data: await payment.createPayment(parsed.data) }); });
+app.post('/api/payments/webhook', async (req, res) => { const result = await payment.handleWebhook(JSON.stringify(req.body), String(req.header('x-payment-signature') || '')); res.json({ received: true, data: result }); });
+if (process.env.NODE_ENV !== 'test') app.listen(port, () => console.log(`CUTLY API listening on :${port}`));
+export default app;

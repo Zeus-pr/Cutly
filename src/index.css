@@ -1,0 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+
+  /* Reddit-orange dark theme */
+  --color-void: #0C0A09;
+  --color-surface: #141110;
+  --color-card: #1C1915;
+  --color-border: rgba(255,255,255,0.07);
+  --color-orange: #FF4500;
+  --color-orange-dim: rgba(255,69,0,0.18);
+  --color-orange-glow: rgba(255,69,0,0.32);
+  --color-muted: rgba(255,255,255,0.38);
+  --color-soft: rgba(255,255,255,0.65);
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--color-void);
+}
+
+/* ── Splash cut animation ── */
+@keyframes cutTop {
+  0%   { transform: translateY(0); }
+  100% { transform: translateY(-102%); }
+}
+@keyframes cutBottom {
+  0%   { transform: translateY(0); }
+  100% { transform: translateY(102%); }
+}
+@keyframes logoJolt {
+  0%   { transform: scale(1) rotate(0deg); }
+  20%  { transform: scale(1.08) rotate(-6deg); }
+  40%  { transform: scale(1.14) rotate(7deg); }
+  60%  { transform: scale(1.1) rotate(-3deg); }
+  80%  { transform: scale(1.04) rotate(2deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+@keyframes tapPulse {
+  0%   { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50%       { transform: scale(1.04); }
+}
+@keyframes scanline {
+  0%   { top: 0%; opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes contentReveal {
+  from { opacity: 0; transform: translateY(36px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.anim-fadeUp        { animation: fadeUp 0.5s cubic-bezier(0.22,1,0.36,1) both; }
+.anim-fadeIn        { animation: fadeIn 0.4s ease both; }
+.anim-contentReveal { animation: contentReveal 0.55s cubic-bezier(0.22,1,0.36,1) both; }

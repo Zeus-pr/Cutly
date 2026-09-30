@@ -1,0 +1,4 @@
+export type BookingState = 'AVAILABLE' | 'HELD' | 'PAYMENT_PENDING' | 'CONFIRMED' | 'ARRIVED' | 'IN_SERVICE' | 'COMPLETED' | 'EXPIRED' | 'FAILED' | 'CANCELLED' | 'NO_SHOW' | 'REFUNDED';
+const transitions: Record<BookingState, BookingState[]> = { AVAILABLE: ['HELD'], HELD: ['PAYMENT_PENDING', 'EXPIRED'], PAYMENT_PENDING: ['CONFIRMED', 'FAILED', 'EXPIRED'], CONFIRMED: ['ARRIVED', 'CANCELLED', 'NO_SHOW'], ARRIVED: ['IN_SERVICE'], IN_SERVICE: ['COMPLETED'], COMPLETED: [], EXPIRED: [], FAILED: [], CANCELLED: ['REFUNDED'], NO_SHOW: [], REFUNDED: [] };
+export function canTransition(from: BookingState, to: BookingState) { return transitions[from].includes(to); }
+export function assertTransition(from: BookingState, to: BookingState) { if (!canTransition(from, to)) throw new Error(`Invalid booking transition: ${from} -> ${to}`); }

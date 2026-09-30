@@ -1,0 +1,218 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+enum BookingStatus {
+  HELD
+  PAYMENT_PENDING
+  CONFIRMED
+  ARRIVED
+  IN_SERVICE
+  COMPLETED
+  EXPIRED
+  FAILED
+  CANCELLED
+  NO_SHOW
+}
+enum PaymentStatus {
+  CREATED
+  PAYMENT_PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+model User {
+  id String @id @default(cuid())
+  phone String @unique
+  email String?
+  name String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  bookings Booking[]
+  favourites FavouriteShop[]
+  reviews Review[]
+  savedLocations SavedLocation[]
+}
+model SavedLocation {
+  id String @id @default(cuid())
+  userId String
+  label String
+  address String
+  latitude Decimal
+  longitude Decimal
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+model Shop {
+  id String @id @default(cuid())
+  name String
+  address String
+  city String
+  latitude Decimal
+  longitude Decimal
+  timezone String @default("Asia/Kolkata")
+  isActive Boolean @default(true)
+  images ShopImage[]
+  hours ShopWorkingHours[]
+  barbers Barber[]
+  services ShopService[]
+  bookings Booking[]
+  favourites FavouriteShop[]
+  reviews Review[]
+  createdAt DateTime @default(now())
+}
+model ShopImage {
+  id String @id @default(cuid())
+  shopId String
+  url String
+  sortOrder Int @default(0)
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+}
+model ShopWorkingHours {
+  id String @id @default(cuid())
+  shopId String
+  weekday Int
+  opensAt String
+  closesAt String
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  @@unique([shopId, weekday])
+}
+model Barber {
+  id String @id @default(cuid())
+  shopId String
+  name String
+  rating Decimal @default(0)
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  hours BarberWorkingHours[]
+  breaks BarberBreak[]
+  leaves BarberLeave[]
+  bookings Booking[]
+}
+model BarberWorkingHours {
+  id String @id @default(cuid())
+  barberId String
+  weekday Int
+  opensAt String
+  closesAt String
+  barber Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  @@unique([barberId, weekday])
+}
+model BarberBreak {
+  id String @id @default(cuid())
+  barberId String
+  startsAt DateTime
+  endsAt DateTime
+  barber Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  @@index([barberId, startsAt])
+}
+model BarberLeave {
+  id String @id @default(cuid())
+  barberId String
+  startsAt DateTime
+  endsAt DateTime
+  reason String?
+  barber Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  @@index([barberId, startsAt])
+}
+model Service {
+  id String @id @default(cuid())
+  name String
+  durationMinutes Int
+  bufferMinutes Int @default(0)
+  active Boolean @default(true)
+  shops ShopService[]
+  bookings BookingService[]
+}
+model ShopService {
+  shopId String
+  serviceId String
+  pricePaise Int
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  @@id([shopId, serviceId])
+}
+model Booking {
+  id String @id @default(cuid())
+  userId String
+  shopId String
+  barberId String
+  startsAt DateTime
+  endsAt DateTime
+  status BookingStatus
+  totalPaise Int
+  advancePaise Int
+  bookingCode String @unique
+  idempotencyKey String @unique
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id])
+  shop Shop @relation(fields: [shopId], references: [id])
+  barber Barber @relation(fields: [barberId], references: [id])
+  services BookingService[]
+  payment BookingPayment?
+  review Review?
+  @@index([barberId, startsAt, endsAt])
+  @@index([userId, createdAt])
+}
+model BookingService {
+  bookingId String
+  serviceId String
+  pricePaise Int
+  durationMinutes Int
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  service Service @relation(fields: [serviceId], references: [id])
+  @@id([bookingId, serviceId])
+}
+model BookingPayment {
+  id String @id @default(cuid())
+  bookingId String @unique
+  provider String
+  providerPaymentId String?
+  amountPaise Int
+  status PaymentStatus
+  createdAt DateTime @default(now())
+  booking Booking @relation(fields: [bookingId], references: [id])
+}
+model BookingHold {
+  id String @id @default(cuid())
+  userId String
+  shopId String
+  barberId String
+  startsAt DateTime
+  endsAt DateTime
+  expiresAt DateTime
+  idempotencyKey String @unique
+  @@index([barberId, startsAt, expiresAt])
+}
+model FavouriteShop {
+  userId String
+  shopId String
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  @@id([userId, shopId])
+}
+model Review {
+  id String @id @default(cuid())
+  userId String
+  shopId String
+  bookingId String @unique
+  rating Int
+  text String?
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id])
+  shop Shop @relation(fields: [shopId], references: [id])
+  booking Booking @relation(fields: [bookingId], references: [id])
+}
+model Notification {
+  id String @id @default(cuid())
+  userId String
+  type String
+  title String
+  body String
+  readAt DateTime?
+  createdAt DateTime @default(now())
+}
