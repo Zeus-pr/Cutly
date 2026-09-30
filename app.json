@@ -4,11 +4,16 @@
     "slug": "cutly",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/cutly-icon.png",
     "scheme": "cutly",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "splash": { "image": "./assets/cutly-logo.png", "resizeMode": "contain", "backgroundColor": "#0EC9A5" },
     "ios": { "supportsTablet": true, "bundleIdentifier": "com.cutly.app" },
-    "android": { "package": "com.cutly.app", "adaptiveIcon": { "backgroundColor": "#101112" } },
+    "android": {
+      "package": "com.cutly.app",
+      "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#0EC9A5" }
+    },
     "plugins": ["expo-router", "expo-secure-store", "expo-location"],
     "experiments": { "typedRoutes": true }
   }

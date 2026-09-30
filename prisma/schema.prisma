@@ -28,9 +28,11 @@ enum PaymentStatus {
 }
 model User {
   id String @id @default(cuid())
-  phone String @unique
-  email String?
+  phone String? @unique
+  email String? @unique
   name String?
+  passwordHash String?
+  googleSub String? @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   bookings Booking[]
@@ -206,6 +208,14 @@ model Review {
   user User @relation(fields: [userId], references: [id])
   shop Shop @relation(fields: [shopId], references: [id])
   booking Booking @relation(fields: [bookingId], references: [id])
+}
+model PhoneOtp {
+  id String @id @default(cuid())
+  phone String
+  codeHash String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([phone, createdAt])
 }
 model Notification {
   id String @id @default(cuid())
