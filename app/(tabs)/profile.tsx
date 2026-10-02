@@ -38,7 +38,7 @@ export default function Profile() {
           style={styles.logout}
           onPress={() => {
             useSessionStore.getState().clear();
-            router.replace('/auth');
+            router.replace('/welcome');
           }}
         >
           <Text style={styles.logoutText}>Log out</Text>

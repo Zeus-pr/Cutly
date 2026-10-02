@@ -1,84 +1,82 @@
 import { useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '@/services/api';
 import { colors, radii, spacing, typography } from '@/constants/theme';
 import { ShopCard } from '@/components/ShopCard';
-import { SectionTitle } from '@/components/SectionTitle';
 import { useSessionStore } from '@/store/useSessionStore';
 
-const picks = [
-  { label: 'Haircut', icon: 'cut-outline' as const },
-  { label: 'Beard', icon: 'man-outline' as const },
-  { label: 'Hair + Beard', icon: 'sparkles-outline' as const }
-];
+const picks = ['Haircut', 'Beard', 'Hair Wash', 'Facial'];
+
+function greeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
 
 export default function Home() {
   const [query, setQuery] = useState('');
-  const email = useSessionStore((state) => state.email);
-  const initial = (email || 'C').trim().charAt(0).toUpperCase();
+  const [pick, setPick] = useState('Haircut');
+  const city = useSessionStore((state) => state.city);
   const { data = [], isLoading, refetch, isRefetching } = useQuery({
     queryKey: ['shops', query],
     queryFn: () => api.shops({ query })
   });
-  const asap = useMemo(() => data.filter((shop) => shop.isOpen && shop.nextAvailableAt), [data]);
+  const shops = useMemo(() => {
+    const needle = pick.toLowerCase();
+    return data.filter((shop) => shop.services.some((service) => service.toLowerCase().includes(needle)) || shop.name.toLowerCase().includes(needle));
+  }, [data, pick]);
 
   return (
     <SafeAreaView style={styles.safe}>
       <FlatList
-        data={data}
+        data={shops}
         keyExtractor={(item) => item.id}
-        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.ink} />}
+        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.accent} />}
         contentContainerStyle={styles.content}
         ListHeaderComponent={
           <View>
             <View style={styles.top}>
-              <Pressable style={styles.location}>
+              <View style={styles.location}>
                 <Ionicons name="location" size={16} color={colors.accent} />
-                <Text style={styles.locationText}>Burdwan</Text>
+                <Text style={styles.locationText}>{city}</Text>
                 <Ionicons name="chevron-down" size={14} color={colors.muted} />
-              </Pressable>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{initial}</Text>
               </View>
+              <Ionicons name="notifications-outline" size={22} color={colors.ink} />
             </View>
-            <Text style={styles.greeting}>Where do you{'\n'}want to go today?</Text>
+            <Text style={styles.hello}>{greeting()}</Text>
+            <Text style={styles.greeting}>Find your next cut</Text>
             <View style={styles.search}>
               <Ionicons name="search" size={18} color={colors.muted} />
               <TextInput
                 value={query}
                 onChangeText={setQuery}
-                placeholder="Shops, services, barbers"
+                placeholder="Search barber shops or services"
                 placeholderTextColor={colors.muted}
                 style={styles.input}
                 returnKeyType="search"
               />
             </View>
-            <Pressable style={styles.asap} onPress={() => router.push('/explore')}>
-              <View style={styles.asapIcon}>
-                <Ionicons name="flash" size={18} color={colors.white} />
-              </View>
-              <View style={styles.asapCopy}>
-                <Text style={styles.asapTitle}>Need a haircut now?</Text>
-                <Text style={styles.asapSub}>
-                  {asap.length ? `${asap.length} shops open nearby` : 'Find the next open chair'}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.muted} />
-            </Pressable>
-            <SectionTitle title="Quick picks" />
-            <View style={styles.picks}>
-              {picks.map((item) => (
-                <Pressable key={item.label} style={styles.pick} onPress={() => setQuery(item.label)}>
-                  <Ionicons name={item.icon} size={20} color={colors.ink} />
-                  <Text style={styles.pickText}>{item.label}</Text>
-                </Pressable>
-              ))}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.picks}>
+              {picks.map((label) => {
+                const selected = pick === label;
+                return (
+                  <Pressable key={label} onPress={() => setPick(label)} style={[styles.pick, selected && styles.pickOn]}>
+                    <Text style={[styles.pickText, selected && styles.pickTextOn]}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Available near you</Text>
+              <Pressable onPress={() => router.push('/explore')}>
+                <Text style={styles.seeAll}>See all</Text>
+              </Pressable>
             </View>
-            <SectionTitle title="Nearby" action="See all" onAction={() => router.push('/explore')} />
           </View>
         }
         ListEmptyComponent={
@@ -87,10 +85,7 @@ export default function Home() {
           </Text>
         }
         renderItem={({ item }) => (
-          <ShopCard
-            shop={item}
-            onPress={() => router.push({ pathname: '/shop/[id]', params: { id: item.id } })}
-          />
+          <ShopCard shop={item} onPress={() => router.push({ pathname: '/shop/[id]', params: { id: item.id } })} />
         )}
       />
     </SafeAreaView>
@@ -103,41 +98,35 @@ const styles = StyleSheet.create({
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   location: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   locationText: { ...typography.heading, color: colors.ink },
-  avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: colors.white, fontWeight: '600', fontSize: 15 },
-  greeting: { ...typography.display, color: colors.ink, marginTop: spacing.lg },
+  hello: { ...typography.body, color: colors.muted, marginTop: spacing.lg },
+  greeting: { ...typography.display, color: colors.ink, marginTop: 2 },
   search: {
     backgroundColor: colors.surface,
-    borderRadius: 12,
-    height: 44,
+    borderRadius: radii.lg,
+    height: 48,
     paddingHorizontal: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: spacing.lg
   },
-  input: { flex: 1, marginLeft: spacing.sm, color: colors.ink, fontSize: 17 },
-  asap: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.lg,
-    padding: spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: spacing.lg,
-    marginBottom: spacing.xl
-  },
-  asapIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md },
-  asapCopy: { flex: 1 },
-  asapTitle: { ...typography.heading, color: colors.ink },
-  asapSub: { ...typography.caption, color: colors.muted, marginTop: 2 },
-  picks: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.xl },
+  input: { flex: 1, marginLeft: spacing.sm, color: colors.ink, fontSize: 16 },
+  picks: { gap: spacing.sm, paddingVertical: spacing.lg },
   pick: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radii.md,
-    paddingVertical: 14,
-    alignItems: 'center',
-    gap: 8
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.line,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: colors.canvas
   },
-  pickText: { ...typography.caption, color: colors.ink, fontWeight: '500' },
+  pickOn: {
+    backgroundColor: 'rgba(14,201,165,0.92)',
+    borderColor: 'rgba(255,255,255,0.7)'
+  },
+  pickText: { ...typography.body, color: colors.ink },
+  pickTextOn: { color: colors.white, fontWeight: '600' },
+  section: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
+  sectionTitle: { ...typography.heading, color: colors.ink },
+  seeAll: { ...typography.body, color: colors.accent },
   empty: { color: colors.muted, paddingVertical: spacing.xl, textAlign: 'center' }
 });

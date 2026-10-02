@@ -3,45 +3,49 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radii, spacing, typography } from '@/constants/theme';
 import type { Shop } from '@/types/domain';
-import { formatINR } from '@/utils/money';
 import { formatTime } from '@/utils/time';
 
 export function ShopCard({ shop, onPress }: { shop: Shop; onPress: () => void }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
-      <Image source={shop.imageUrl} style={styles.image} contentFit="cover" transition={180} />
-      <View style={styles.body}>
-        <View style={styles.row}>
-          <Text style={styles.name}>{shop.name}</Text>
-          <View style={styles.rating}>
-            <Ionicons name="star" size={12} color={colors.ink} />
-            <Text style={styles.ratingText}>{shop.rating.toFixed(1)}</Text>
-          </View>
+      <View>
+        <Image source={shop.imageUrl} style={styles.image} contentFit="cover" transition={180} />
+        <View style={styles.chips}>
+          <Text style={styles.chip}>{shop.isOpen ? 'Open · Closes 9:00 PM' : 'Closed'}</Text>
+          {shop.nextAvailableAt ? <Text style={styles.chip}>Next slot {formatTime(shop.nextAvailableAt)}</Text> : null}
         </View>
-        <Text style={styles.meta}>
-          {shop.distanceKm.toFixed(1)} km
-          <Text style={{ color: shop.isOpen ? colors.success : colors.muted }}>{shop.isOpen ? '  ·  Open' : '  ·  Closed'}</Text>
-          {`  ·  ${shop.reviewCount} reviews`}
-        </Text>
-        <Text style={styles.price}>{shop.services[0]} from {formatINR(shop.priceFromPaise)}</Text>
-        {shop.nextAvailableAt ? (
-          <Text style={styles.next}>Next at {formatTime(shop.nextAvailableAt)}</Text>
-        ) : null}
+      </View>
+      <View style={styles.body}>
+        <Text style={styles.name}>{shop.name}</Text>
+        <View style={styles.meta}>
+          <Ionicons name="star" size={13} color="#C48A12" />
+          <Text style={styles.metaText}>{shop.rating.toFixed(1)} ({shop.reviewCount})</Text>
+          <Text style={styles.metaText}>{shop.distanceKm.toFixed(1)} km</Text>
+        </View>
       </View>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: colors.surface, borderRadius: radii.lg, overflow: 'hidden', marginBottom: spacing.md },
-  pressed: { opacity: 0.86 },
-  image: { height: 168, width: '100%' },
-  body: { padding: spacing.md, gap: 4 },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  card: { backgroundColor: colors.canvas, marginBottom: spacing.lg },
+  pressed: { opacity: 0.92 },
+  image: { height: 168, width: '100%', borderRadius: radii.lg },
+  chips: { position: 'absolute', left: 10, right: 10, bottom: 10, flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  chip: {
+    overflow: 'hidden',
+    backgroundColor: 'rgba(14,201,165,0.92)',
+    color: colors.white,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.45)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  body: { paddingTop: spacing.sm, gap: 4 },
   name: { ...typography.heading, color: colors.ink },
-  rating: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  ratingText: { ...typography.caption, color: colors.ink, fontWeight: '600' },
-  meta: { ...typography.caption, color: colors.muted, marginTop: 2 },
-  price: { ...typography.body, color: colors.ink, marginTop: 6 },
-  next: { ...typography.caption, color: colors.accent, marginTop: 6, fontWeight: '600' }
+  meta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  metaText: { ...typography.caption, color: colors.muted }
 });

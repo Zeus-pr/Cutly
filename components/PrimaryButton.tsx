@@ -15,12 +15,19 @@ export function PrimaryButton({ label, onPress, disabled }: { label: string; onP
 
 const styles = StyleSheet.create({
   button: {
-    height: 50,
-    borderRadius: radii.md,
-    backgroundColor: colors.accent,
+    height: 52,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(14, 201, 165, 0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 22
+    paddingHorizontal: 22,
+    shadowColor: '#0EC9A5',
+    shadowOpacity: 0.28,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4
   },
   text: { color: colors.white, fontSize: 17, fontWeight: '600' },
   disabled: { opacity: 0.4 },
