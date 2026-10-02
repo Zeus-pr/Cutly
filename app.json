@@ -8,13 +8,46 @@
     "scheme": "cutly",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "splash": { "image": "./assets/cutly-logo.png", "resizeMode": "contain", "backgroundColor": "#0EC9A5" },
-    "ios": { "supportsTablet": true, "bundleIdentifier": "com.cutly.app" },
+    "splash": {
+      "image": "./assets/cutly-logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0EC9A5"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cutly.app"
+    },
     "android": {
       "package": "com.cutly.app",
-      "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#0EC9A5" }
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0EC9A5"
+      }
     },
-    "plugins": ["expo-router", "expo-secure-store", "expo-location"],
-    "experiments": { "typedRoutes": true }
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-location",
+      "expo-font",
+      "expo-image",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "CUTLY uses your photos on the shop page."
+        }
+      ],
+      "expo-splash-screen",
+      "expo-status-bar",
+      [
+        "expo-notifications",
+        {
+          "color": "#0EC9A5",
+          "defaultChannel": "bookings"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
   }
 }

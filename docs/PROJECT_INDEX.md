@@ -1,8 +1,15 @@
 # CUTLY project index
 
+> **Canonical product knowledge now lives at the repo root:**  
+> [`PRD.md`](../PRD.md) · [`ARCHITECTURE.md`](../ARCHITECTURE.md) · [`DESIGN.md`](../DESIGN.md) · [`RULES.md`](../RULES.md) · [`TASKS.md`](../TASKS.md) · [`MEMORY.md`](../MEMORY.md)  
+> Agents keep those updated via `.cursor/rules/cutly-knowledge-docs.mdc`.  
+> Sections below may be outdated (they still describe an early mock-only client).
+
+---
+
 Customer app for finding a barber shop, seeing today's slots, and booking with a 30% advance. Product name in code and stores: **CUTLY**. Package name: `cutly` `0.1.0`. Native ids: `com.cutly.app`. Deep link scheme: `cutly`. Default city in the UI and seed data: **Burdwan**, timezone `Asia/Kolkata`. Money is stored as integer **paise**.
 
-This file is a map of the repo as it exists. Use it before changing a screen, the API, or the schema.
+This file is a map of the repo as it existed earlier. Use the root knowledge docs first.
 
 ## How the pieces fit
 

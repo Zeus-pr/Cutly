@@ -5,7 +5,10 @@ import { router } from 'expo-router';
 import { useFonts } from 'expo-font';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radii, spacing, typography } from '@/constants/theme';
+import { radii, spacing, typography, type Palette } from '@/constants/theme';
+import { useColors, useThemedStyles } from '@/store/useThemeStore';
+import { placeFromGeocode } from '@/services/device-location';
+import { usePlaceStore } from '@/store/usePlaceStore';
 import { useSessionStore } from '@/store/useSessionStore';
 
 const pointers = [
@@ -31,6 +34,8 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 }
 
 export default function Welcome() {
+  const colors = useColors();
+  const styles = useThemedStyles(welcomeStyles);
   const pager = useRef<ScrollView>(null);
   const left = useRef(false);
   const [page, setPage] = useState(0);
@@ -89,7 +94,14 @@ export default function Welcome() {
         return;
       }
       const places = await within(Location.reverseGeocodeAsync(position.coords), 1500);
-      finish(places?.[0]?.city || places?.[0]?.subregion || undefined);
+      const first = places?.[0];
+      if (first) {
+        const hit = placeFromGeocode(first, position.coords);
+        usePlaceStore.getState().select(hit);
+        finish(hit.city);
+        return;
+      }
+      finish();
     } catch {
       clearTimeout(deadline);
       finish();
@@ -208,7 +220,8 @@ export default function Welcome() {
   );
 }
 
-const styles = StyleSheet.create({
+function welcomeStyles(colors: Palette) {
+  return StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   orbTop: {
     position: 'absolute',
@@ -296,3 +309,4 @@ const styles = StyleSheet.create({
   glassText: { color: colors.white, fontSize: 17, fontWeight: '600' },
   manual: { textAlign: 'center', color: colors.ink, ...typography.body }
 });
+}

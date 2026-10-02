@@ -21,7 +21,40 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 function save(session: { token: string; user: SessionUser }) {
-  useSessionStore.getState().setSession(session.token, session.user.phone || '', session.user.email);
+  useSessionStore.getState().setSession(session.token, session.user.phone || '', session.user.email, session.user.name);
+}
+
+export async function refreshProfile() {
+  const token = useSessionStore.getState().accessToken;
+  if (!token) return;
+  try {
+    const response = await fetch(`${base}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) return;
+    const user = payload.data as SessionUser;
+    useSessionStore.getState().setProfile(user);
+  } catch {
+    // Keep the name already stored on the device.
+  }
+}
+
+export async function updateProfileName(name: string) {
+  const token = useSessionStore.getState().accessToken;
+  if (!token) throw new Error('Sign in again.');
+  let response: Response;
+  try {
+    response = await fetch(`${base}/auth/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name })
+    });
+  } catch {
+    throw new Error('Cannot reach the CUTLY server. Start it with npm run backend:dev.');
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Could not save your name.');
+  const user = payload.data as SessionUser;
+  useSessionStore.getState().setProfile(user);
 }
 
 export const auth = {

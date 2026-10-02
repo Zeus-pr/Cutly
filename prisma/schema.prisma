@@ -26,6 +26,24 @@ enum PaymentStatus {
   REFUNDED
   PARTIALLY_REFUNDED
 }
+enum ShopKind {
+  BARBER
+  SALON
+  PARLOUR
+  TATTOO
+  PIERCING
+}
+model Partner {
+  id String @id @default(cuid())
+  phone String? @unique
+  email String? @unique
+  name String?
+  passwordHash String?
+  googleSub String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  shops Shop[]
+}
 model User {
   id String @id @default(cuid())
   phone String? @unique
@@ -33,6 +51,7 @@ model User {
   name String?
   passwordHash String?
   googleSub String? @unique
+  pushToken String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   bookings Booking[]
@@ -58,6 +77,13 @@ model Shop {
   longitude Decimal
   timezone String @default("Asia/Kolkata")
   isActive Boolean @default(true)
+  ownerPartnerId String? @unique
+  owner Partner? @relation(fields: [ownerPartnerId], references: [id])
+  kind ShopKind?
+  chairCount Int @default(1)
+  setupDone Boolean @default(false)
+  amenities String[] @default([])
+  dayCapacity ShopDayCapacity[]
   images ShopImage[]
   hours ShopWorkingHours[]
   barbers Barber[]
@@ -66,6 +92,15 @@ model Shop {
   favourites FavouriteShop[]
   reviews Review[]
   createdAt DateTime @default(now())
+}
+model ShopDayCapacity {
+  id String @id @default(cuid())
+  shopId String
+  date String
+  workersPresent Int
+  chairsInUse Int
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  @@unique([shopId, date])
 }
 model ShopImage {
   id String @id @default(cuid())
@@ -126,6 +161,7 @@ model Service {
   durationMinutes Int
   bufferMinutes Int @default(0)
   active Boolean @default(true)
+  kind ShopKind?
   shops ShopService[]
   bookings BookingService[]
 }

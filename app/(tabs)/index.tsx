@@ -1,15 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { ServiceMark } from '@/components/ServiceMark';
 import { api } from '@/services/api';
-import { colors, radii, spacing, typography } from '@/constants/theme';
+import { radii, spacing, typography, type Palette } from '@/constants/theme';
+import { useColors, useThemedStyles } from '@/store/useThemeStore';
 import { ShopCard } from '@/components/ShopCard';
-import { useSessionStore } from '@/store/useSessionStore';
+import { usePlaceStore } from '@/store/usePlaceStore';
+import { givenName, useSessionStore } from '@/store/useSessionStore';
 
-const picks = ['Haircut', 'Beard', 'Hair Wash', 'Facial'];
+const picks = ['Haircut', 'Beard', 'Hair Wash', 'Facial'] as const;
 
 function greeting() {
   const hour = new Date().getHours();
@@ -19,12 +22,23 @@ function greeting() {
 }
 
 export default function Home() {
+  const colors = useColors();
+  const styles = useThemedStyles(homeStyles);
   const [query, setQuery] = useState('');
   const [pick, setPick] = useState('Haircut');
   const city = useSessionStore((state) => state.city);
+  const customer = givenName(useSessionStore((state) => state.name));
+  const active = usePlaceStore((state) => state.active);
+  const placeTitle = active?.area || city;
+  const placeLine = active?.address && active.address !== placeTitle ? active.address : null;
   const { data = [], isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ['shops', query],
-    queryFn: () => api.shops({ query })
+    queryKey: ['shops', query, active?.latitude, active?.longitude],
+    queryFn: () => api.shops({
+      query,
+      lat: active?.latitude ?? 23.2324,
+      lng: active?.longitude ?? 87.8615,
+      radiusKm: 30
+    })
   });
   const shops = useMemo(() => {
     const needle = pick.toLowerCase();
@@ -41,14 +55,24 @@ export default function Home() {
         ListHeaderComponent={
           <View>
             <View style={styles.top}>
-              <View style={styles.location}>
+              <Pressable
+                style={styles.location}
+                onPress={() => usePlaceStore.getState().openSheet()}
+                accessibilityRole="button"
+                accessibilityLabel={`Location, ${placeTitle}`}
+              >
                 <Ionicons name="location" size={16} color={colors.accent} />
-                <Text style={styles.locationText}>{city}</Text>
-                <Ionicons name="chevron-down" size={14} color={colors.muted} />
-              </View>
+                <View style={styles.locationCopy}>
+                  <View style={styles.locationLine}>
+                    <Text style={styles.locationText} numberOfLines={1}>{placeTitle}</Text>
+                    <Ionicons name="chevron-down" size={14} color={colors.muted} />
+                  </View>
+                  {placeLine ? <Text style={styles.locationSub} numberOfLines={1}>{placeLine}</Text> : null}
+                </View>
+              </Pressable>
               <Ionicons name="notifications-outline" size={22} color={colors.ink} />
             </View>
-            <Text style={styles.hello}>{greeting()}</Text>
+            <Text style={styles.hello}>{customer ? `${greeting()}, ${customer}` : greeting()}</Text>
             <Text style={styles.greeting}>Find your next cut</Text>
             <View style={styles.search}>
               <Ionicons name="search" size={18} color={colors.muted} />
@@ -61,16 +85,21 @@ export default function Home() {
                 returnKeyType="search"
               />
             </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.picks}>
-              {picks.map((label) => {
-                const selected = pick === label;
-                return (
-                  <Pressable key={label} onPress={() => setPick(label)} style={[styles.pick, selected && styles.pickOn]}>
-                    <Text style={[styles.pickText, selected && styles.pickTextOn]}>{label}</Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
+            <View style={styles.grid}>
+              {[picks.slice(0, 2), picks.slice(2)].map((row) => (
+                <View key={row[0]} style={styles.gridRow}>
+                  {row.map((item) => {
+                    const selected = pick === item;
+                    return (
+                      <Pressable key={item} onPress={() => setPick(item)} style={[styles.tile, selected && styles.tileOn]}>
+                        <ServiceMark kind={item} color={selected ? colors.white : colors.limeDark} />
+                        <Text style={[styles.tileText, selected && styles.tileTextOn]}>{item}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Available near you</Text>
               <Pressable onPress={() => router.push('/explore')}>
@@ -92,12 +121,16 @@ export default function Home() {
   );
 }
 
-const styles = StyleSheet.create({
+function homeStyles(colors: Palette) {
+  return StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   content: { padding: spacing.md, paddingBottom: 120 },
   top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  location: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  locationText: { ...typography.heading, color: colors.ink },
+  location: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, marginRight: spacing.md },
+  locationCopy: { flex: 1 },
+  locationLine: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  locationText: { ...typography.heading, color: colors.ink, flexShrink: 1 },
+  locationSub: { ...typography.caption, color: colors.muted },
   hello: { ...typography.body, color: colors.muted, marginTop: spacing.lg },
   greeting: { ...typography.display, color: colors.ink, marginTop: 2 },
   search: {
@@ -110,23 +143,23 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg
   },
   input: { flex: 1, marginLeft: spacing.sm, color: colors.ink, fontSize: 16 },
-  picks: { gap: spacing.sm, paddingVertical: spacing.lg },
-  pick: {
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.line,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: colors.canvas
+  grid: { gap: 12, marginTop: spacing.lg },
+  gridRow: { flexDirection: 'row', gap: 12 },
+  tile: {
+    flex: 1,
+    height: 108,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8
   },
-  pickOn: {
-    backgroundColor: 'rgba(14,201,165,0.92)',
-    borderColor: 'rgba(255,255,255,0.7)'
-  },
-  pickText: { ...typography.body, color: colors.ink },
-  pickTextOn: { color: colors.white, fontWeight: '600' },
+  tileOn: { backgroundColor: colors.accent },
+  tileText: { ...typography.body, color: colors.ink, fontWeight: '600' },
+  tileTextOn: { color: colors.white },
   section: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
   sectionTitle: { ...typography.heading, color: colors.ink },
   seeAll: { ...typography.body, color: colors.accent },
   empty: { color: colors.muted, paddingVertical: spacing.xl, textAlign: 'center' }
 });
+}

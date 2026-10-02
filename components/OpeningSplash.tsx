@@ -163,7 +163,7 @@ export function OpeningSplash({ onReveal, onDone }: { onReveal?: () => void; onD
 
 const styles = StyleSheet.create({
   root: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 20,
     backgroundColor: teal,
     alignItems: 'center',

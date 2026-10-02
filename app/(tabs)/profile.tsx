@@ -1,67 +1,221 @@
-import { router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState, type ReactNode } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radii, spacing, typography } from '@/constants/theme';
+import { PrimaryButton } from '@/components/PrimaryButton';
+import { radii, spacing, typography, type Palette } from '@/constants/theme';
+import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
+import { updateProfileName } from '@/services/auth';
+import { usePlaceStore } from '@/store/usePlaceStore';
 import { useSessionStore } from '@/store/useSessionStore';
 
-const rows = ['Favourite shops', 'Saved locations', 'Notifications', 'Help & support', 'Privacy & terms'];
+const preferences = [
+  { label: 'Favourite shops', icon: 'heart-outline' as const },
+  { label: 'Notifications', icon: 'notifications-outline' as const },
+  { label: 'Help & support', icon: 'help-circle-outline' as const },
+  { label: 'Privacy & terms', icon: 'shield-checkmark-outline' as const }
+];
 
 export default function Profile() {
+  const colors = useColors();
+  const dark = useThemeStore((state) => state.dark);
+  const styles = useThemedStyles(profileStyles);
   const email = useSessionStore((state) => state.email);
   const phone = useSessionStore((state) => state.phone);
-  const identity = email || phone || 'CUTLY customer';
-  const initial = identity.trim().charAt(0).toUpperCase();
+  const name = useSessionStore((state) => state.name);
+  const display = name?.trim() || 'Add your name';
+  const contact = email || phone || '';
+  const initial = (name || email || phone || 'C').trim().charAt(0).toUpperCase();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  function openEdit() {
+    setDraft(name || '');
+    setError('');
+    setEditing(true);
+  }
+
+  async function saveName() {
+    const next = draft.trim();
+    if (!next) {
+      setError('Enter your name.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      await updateProfileName(next);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save your name.');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.content}>
-        <Text style={styles.title}>Profile</Text>
-        <View style={styles.profile}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <View style={styles.hero}>
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>{initial}</Text>
           </View>
-          <View style={styles.identity}>
-            <Text style={styles.name}>CUTLY customer</Text>
-            <Text style={styles.phone}>{identity}</Text>
+          <View style={styles.heroCopy}>
+            <Text style={styles.heroName}>{display}</Text>
+            {contact ? <Text style={styles.heroSub}>{contact}</Text> : null}
+            <Pressable onPress={openEdit} hitSlop={8}>
+              <Text style={styles.edit}>Edit profile ›</Text>
+            </Pressable>
           </View>
         </View>
-        <View style={styles.group}>
-          {rows.map((item, index) => (
-            <Pressable key={item} style={[styles.item, index === rows.length - 1 && styles.itemLast]}>
-              <Text style={styles.itemText}>{item}</Text>
+
+        <View style={styles.shortcuts}>
+          <Pressable style={styles.shortcut} onPress={() => router.push('/(tabs)/bookings')}>
+            <Ionicons name="calendar-outline" size={22} color={colors.limeDark} />
+            <Text style={styles.shortcutText}>Your bookings</Text>
+          </Pressable>
+          <Pressable style={styles.shortcut} onPress={() => usePlaceStore.getState().openSheet()}>
+            <Ionicons name="location-outline" size={22} color={colors.limeDark} />
+            <Text style={styles.shortcutText}>Saved locations</Text>
+          </Pressable>
+        </View>
+
+        <Section title="Your preferences">
+          <View style={styles.row}>
+            <Ionicons name="moon-outline" size={20} color={colors.ink} />
+            <Text style={styles.rowText}>Dark mode</Text>
+            <Switch
+              value={dark}
+              onValueChange={(value) => useThemeStore.getState().setDark(value)}
+              trackColor={{ false: '#D5D8D7', true: colors.accent }}
+              thumbColor={colors.white}
+              accessibilityLabel="Dark mode"
+            />
+          </View>
+          {preferences.map((item, index) => (
+            <Pressable key={item.label} style={[styles.row, index === preferences.length - 1 && styles.rowLast]}>
+              <Ionicons name={item.icon} size={20} color={colors.ink} />
+              <Text style={styles.rowText}>{item.label}</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.muted} />
             </Pressable>
           ))}
-        </View>
-        <Pressable
-          style={styles.logout}
-          onPress={() => {
-            useSessionStore.getState().clear();
-            router.replace('/welcome');
-          }}
-        >
-          <Text style={styles.logoutText}>Log out</Text>
+        </Section>
+
+        <Section title="Account">
+          <Pressable
+            style={[styles.row, styles.rowLast]}
+            onPress={() => {
+              useSessionStore.getState().clear();
+              router.replace('/welcome');
+            }}
+          >
+            <Ionicons name="log-out-outline" size={20} color={colors.danger} />
+            <Text style={[styles.rowText, styles.logout]}>Log out</Text>
+          </Pressable>
+        </Section>
+      </ScrollView>
+
+      <Modal visible={editing} transparent animationType="fade" onRequestClose={() => setEditing(false)}>
+        <Pressable style={styles.backdrop} onPress={() => setEditing(false)}>
+          <Pressable style={styles.dialog}>
+            <Text style={styles.dialogTitle}>Your name</Text>
+            <TextInput
+              value={draft}
+              onChangeText={setDraft}
+              placeholder="Full name"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              autoFocus
+            />
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            <PrimaryButton label={saving ? 'Saving…' : 'Save'} disabled={saving} onPress={() => void saveName()} />
+          </Pressable>
         </Pressable>
-      </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  const styles = useThemedStyles(profileStyles);
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHead}>
+        <View style={styles.mark} />
+        <Text style={styles.sectionTitle}>{title}</Text>
+      </View>
+      <View style={styles.group}>{children}</View>
+    </View>
+  );
+}
+
+function profileStyles(colors: Palette) {
+  return StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
-  content: { padding: spacing.md },
-  title: { ...typography.display, color: colors.ink },
-  profile: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.lg, marginBottom: spacing.lg },
-  avatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', marginRight: spacing.md },
-  avatarText: { color: colors.white, fontSize: 26, fontWeight: '600' },
-  identity: { flex: 1 },
-  name: { ...typography.heading, color: colors.ink },
-  phone: { ...typography.body, color: colors.muted, marginTop: 2 },
+  content: { padding: spacing.md, paddingBottom: 120 },
+  hero: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: '#141110',
+    borderRadius: radii.lg,
+    padding: spacing.md
+  },
+  avatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#F3E6C4',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  avatarText: { color: '#141110', fontSize: 26, fontWeight: '700' },
+  heroCopy: { flex: 1 },
+  heroName: { color: colors.white, fontSize: 22, fontWeight: '700' },
+  heroSub: { color: 'rgba(255,255,255,0.72)', marginTop: 2, fontSize: 14 },
+  edit: { color: colors.accent, marginTop: 6, fontSize: 14, fontWeight: '600' },
+  shortcuts: { flexDirection: 'row', gap: 12, marginTop: spacing.md },
+  shortcut: {
+    flex: 1,
+    minHeight: 84,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    justifyContent: 'center',
+    gap: 8
+  },
+  shortcutText: { ...typography.heading, color: colors.ink, fontSize: 15 },
+  section: { marginTop: spacing.lg },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: spacing.sm },
+  mark: { width: 3, height: 18, borderRadius: 2, backgroundColor: colors.accent },
+  sectionTitle: { ...typography.heading, color: colors.ink },
   group: { backgroundColor: colors.surface, borderRadius: radii.lg, overflow: 'hidden' },
-  item: { minHeight: 52, paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  itemLast: { borderBottomWidth: 0 },
-  itemText: { ...typography.body, color: colors.ink },
-  logout: { marginTop: spacing.lg, backgroundColor: colors.surface, borderRadius: radii.lg, minHeight: 52, alignItems: 'center', justifyContent: 'center' },
-  logoutText: { ...typography.body, color: colors.danger, fontWeight: '600' }
+  row: {
+    minHeight: 56,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line
+  },
+  rowLast: { borderBottomWidth: 0 },
+  rowText: { ...typography.body, color: colors.ink, flex: 1 },
+  logout: { color: colors.danger, fontWeight: '600' },
+  backdrop: { flex: 1, backgroundColor: 'rgba(20,17,16,0.45)', justifyContent: 'center', padding: spacing.lg },
+  dialog: { backgroundColor: colors.canvas, borderRadius: radii.lg, padding: spacing.lg, gap: spacing.md },
+  dialogTitle: { ...typography.title, color: colors.ink },
+  input: {
+    height: 48,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    color: colors.ink,
+    fontSize: 16
+  },
+  error: { color: colors.danger, ...typography.caption }
 });
+}

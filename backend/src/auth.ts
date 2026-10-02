@@ -20,8 +20,8 @@ function publicUser(user: { id: string; email: string | null; phone: string | nu
   return { id: user.id, email: user.email, phone: user.phone, name: user.name };
 }
 
-export function signToken(user: PublicUser) {
-  return jwt.sign({ sub: user.id, email: user.email, phone: user.phone }, secret(), { expiresIn: '30d' });
+export function signToken(user: PublicUser, audience: 'customer' | 'partner' = 'customer') {
+  return jwt.sign({ sub: user.id, email: user.email, phone: user.phone, aud: audience }, secret(), { expiresIn: '30d' });
 }
 
 export async function signUp(email: string, password: string, name?: string) {
@@ -32,6 +32,26 @@ export async function signUp(email: string, password: string, name?: string) {
   });
   const profile = publicUser(user);
   return { token: signToken(profile), user: profile };
+}
+
+export async function userFromToken(token: string) {
+  let payload: jwt.JwtPayload;
+  try {
+    payload = jwt.verify(token, secret()) as jwt.JwtPayload;
+  } catch {
+    throw new Error('Sign in again.');
+  }
+  const id = typeof payload.sub === 'string' ? payload.sub : '';
+  if (!id) throw new Error('Sign in again.');
+  const user = await prisma.user.findUnique({ where: { id } });
+  if (!user) throw new Error('Sign in again.');
+  return publicUser(user);
+}
+
+export async function updateProfileName(token: string, name: string) {
+  const current = await userFromToken(token);
+  const user = await prisma.user.update({ where: { id: current.id }, data: { name } });
+  return publicUser(user);
 }
 
 export async function signIn(email: string, password: string) {

@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CutlyLogo } from '@/components/CutlyLogo';
 import { auth } from '@/services/auth';
+import { useSessionStore } from '@/store/useSessionStore';
 
 const teal = '#0EC9A5';
 const surface = '#FFFFFF';
@@ -239,6 +240,15 @@ function Login({ fades }: { fades: Animated.Value[] }) {
             <Text style={styles.signupLink} onPress={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setError(''); }}>
               {mode === 'signup' ? 'Sign in' : 'Create account'}
             </Text>
+          </Text>
+          <Text
+            style={styles.forgot}
+            onPress={() => {
+              useSessionStore.getState().setAudience(null);
+              router.replace('/role');
+            }}
+          >
+            Customer or partner
           </Text>
         </Animated.View>
       </ScrollView>

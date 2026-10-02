@@ -1,13 +1,130 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/services/api';
-import { colors, radii, spacing, typography } from '@/constants/theme';
+import { notifyBookingConfirmed, registerForPushNotifications } from '@/services/notifications';
+import { type Palette, radii, spacing, typography } from '@/constants/theme';
+import { useColors, useThemedStyles } from '@/store/useThemeStore';
 import { advanceFor, formatINR } from '@/utils/money';
 import { formatDate, formatTime } from '@/utils/time';
 import { PrimaryButton } from '@/components/PrimaryButton';
-export default function ReviewBooking() { const params = useLocalSearchParams<{ shopId: string; serviceId: string; barberId: string; startsAt: string }>(); const [working, setWorking] = useState(false); const shop = useQuery({ queryKey: ['shop', params.shopId], queryFn: () => api.shop(params.shopId || '') }).data; const service = useQuery({ queryKey: ['services', params.shopId], queryFn: () => api.services(params.shopId || '') }).data?.find((s) => s.id === params.serviceId); const barber = useQuery({ queryKey: ['barbers', params.shopId], queryFn: () => api.barbers(params.shopId || '') }).data?.find((b) => b.id === params.barberId); if (!shop || !service || !barber) return null; const advance = advanceFor(service.pricePaise); const pay = async () => { setWorking(true); const booking = await api.createBooking(params); router.replace({ pathname: '/booking/confirmed', params: { bookingId: booking.id, startsAt: booking.startsAt, shopName: shop.name, serviceName: service.name, barberName: barber.name, total: String(service.pricePaise), advance: String(advance) } }); }; return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content}><Pressable onPress={() => router.back()}><Text style={styles.back}>‹ Review booking</Text></Pressable><Text style={styles.title}>Almost there.</Text><Text style={styles.sub}>Review your appointment before paying the 30% advance.</Text><View style={styles.card}><Text style={styles.shop}>{shop.name}</Text><Text style={styles.muted}>{shop.address}</Text><View style={styles.divider} /><Row label="Service" value={service.name} /><Row label="Barber" value={barber.name} /><Row label="When" value={`${formatDate(params.startsAt)} · ${formatTime(params.startsAt)}`} /></View><View style={styles.card}><Row label="Service total" value={formatINR(service.pricePaise)} /><Row label="Pay today (30%)" value={formatINR(advance)} strong /><Row label="Pay at shop" value={formatINR(service.pricePaise - advance)} /><Text style={styles.note}>Your advance is adjusted against the service total. It is not a platform fee.</Text></View></ScrollView><View style={styles.footer}><PrimaryButton label={working ? 'Checking payment…' : `Pay ${formatINR(advance)}`} onPress={pay} disabled={working} /></View></SafeAreaView>; }
-function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) { return <View style={styles.row}><Text style={styles.muted}>{label}</Text><Text style={[styles.value, strong && { fontWeight: '900' }]}>{value}</Text></View>; }
-const styles = StyleSheet.create({ safe: { flex: 1, backgroundColor: colors.canvas }, content: { padding: spacing.md, paddingBottom: 120 }, back: { ...typography.heading, color: colors.ink }, title: { ...typography.display, color: colors.ink, marginTop: spacing.xl }, sub: { ...typography.body, color: colors.muted, marginTop: spacing.sm }, card: { backgroundColor: colors.surface, borderRadius: radii.lg, padding: spacing.md, marginTop: spacing.lg }, shop: { ...typography.heading, color: colors.ink }, muted: { ...typography.body, color: colors.muted }, divider: { height: 1, backgroundColor: colors.line, marginVertical: spacing.md }, row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7 }, value: { ...typography.body, color: colors.ink, fontWeight: '700' }, note: { ...typography.caption, color: colors.muted, marginTop: spacing.md, backgroundColor: colors.canvas, padding: spacing.sm, borderRadius: radii.sm }, footer: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: spacing.md, backgroundColor: colors.canvas } });
+
+export default function ReviewBooking() {
+  const colors = useColors();
+  const styles = useThemedStyles(screenStyles);
+  const params = useLocalSearchParams<{ shopId: string; serviceId: string; barberId: string; startsAt: string }>();
+  const [working, setWorking] = useState(false);
+  const shop = useQuery({ queryKey: ['shop', params.shopId], queryFn: () => api.shop(params.shopId || '') }).data;
+  const service = useQuery({
+    queryKey: ['services', params.shopId],
+    queryFn: () => api.services(params.shopId || '')
+  }).data?.find((s) => s.id === params.serviceId);
+  const barber = useQuery({
+    queryKey: ['barbers', params.shopId],
+    queryFn: () => api.barbers(params.shopId || '')
+  }).data?.find((s) => s.id === params.barberId);
+
+  if (!shop || !service || !barber) return null;
+  const advance = advanceFor(service.pricePaise);
+
+  const pay = async () => {
+    if (working) return;
+    setWorking(true);
+    try {
+      await registerForPushNotifications();
+      const booking = await api.createBooking({
+        shopId: params.shopId,
+        serviceId: params.serviceId,
+        barberId: params.barberId,
+        startsAt: params.startsAt
+      });
+      await notifyBookingConfirmed({
+        shopName: shop.name,
+        serviceName: service.name,
+        startsAt: booking.startsAt,
+        bookingCode: booking.bookingCode
+      });
+      router.replace({
+        pathname: '/booking/confirmed',
+        params: {
+          bookingId: booking.id,
+          startsAt: booking.startsAt,
+          shopName: shop.name,
+          serviceName: service.name,
+          barberName: barber.name,
+          total: String(service.pricePaise),
+          advance: String(advance)
+        }
+      });
+    } catch (err) {
+      Alert.alert('Booking failed', err instanceof Error ? err.message : 'Try another slot.');
+      setWorking(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <Pressable onPress={() => router.back()}>
+          <Text style={styles.back}>‹ Review booking</Text>
+        </Pressable>
+        <Text style={styles.title}>Almost there.</Text>
+        <Text style={styles.sub}>Review your appointment before paying the 30% advance.</Text>
+        <View style={styles.card}>
+          <Text style={styles.shop}>{shop.name}</Text>
+          <Text style={styles.muted}>{shop.address}</Text>
+          <View style={styles.divider} />
+          <Row label="Service" value={service.name} />
+          <Row label="Barber" value={barber.name} />
+          <Row label="When" value={`${formatDate(params.startsAt)} · ${formatTime(params.startsAt)}`} />
+        </View>
+        <View style={styles.card}>
+          <Row label="Service total" value={formatINR(service.pricePaise)} />
+          <Row label="Pay today (30%)" value={formatINR(advance)} strong />
+          <Row label="Pay at shop" value={formatINR(service.pricePaise - advance)} />
+          <Text style={styles.note}>Your advance is adjusted against the service total. It is not a platform fee.</Text>
+        </View>
+      </ScrollView>
+      <View style={styles.footer}>
+        <PrimaryButton label={working ? 'Confirming…' : `Pay ${formatINR(advance)}`} onPress={() => void pay()} disabled={working} />
+      </View>
+    </SafeAreaView>
+  );
+}
+
+function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  const styles = useThemedStyles(screenStyles);
+  return (
+    <View style={styles.row}>
+      <Text style={styles.muted}>{label}</Text>
+      <Text style={[styles.value, strong && { fontWeight: '900' }]}>{value}</Text>
+    </View>
+  );
+}
+
+function screenStyles(colors: Palette) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.canvas },
+    content: { padding: spacing.md, paddingBottom: 120 },
+    back: { ...typography.heading, color: colors.ink },
+    title: { ...typography.display, color: colors.ink, marginTop: spacing.xl },
+    sub: { ...typography.body, color: colors.muted, marginTop: spacing.sm },
+    card: { backgroundColor: colors.surface, borderRadius: radii.lg, padding: spacing.md, marginTop: spacing.lg },
+    shop: { ...typography.heading, color: colors.ink },
+    muted: { ...typography.body, color: colors.muted },
+    divider: { height: 1, backgroundColor: colors.line, marginVertical: spacing.md },
+    row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7 },
+    value: { ...typography.body, color: colors.ink, fontWeight: '700' },
+    note: {
+      ...typography.caption,
+      color: colors.muted,
+      marginTop: spacing.md,
+      backgroundColor: colors.canvas,
+      padding: spacing.sm,
+      borderRadius: radii.sm
+    },
+    footer: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: spacing.md, backgroundColor: colors.canvas }
+  });
+}

@@ -1,11 +1,13 @@
 import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radii, spacing, typography } from '@/constants/theme';
+import { radii, spacing, typography, type Palette } from '@/constants/theme';
+import { useThemedStyles } from '@/store/useThemeStore';
 import type { Shop } from '@/types/domain';
 import { formatTime } from '@/utils/time';
 
 export function ShopCard({ shop, onPress }: { shop: Shop; onPress: () => void }) {
+  const styles = useThemedStyles(cardStyles);
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
       <View>
@@ -27,7 +29,8 @@ export function ShopCard({ shop, onPress }: { shop: Shop; onPress: () => void })
   );
 }
 
-const styles = StyleSheet.create({
+function cardStyles(colors: Palette) {
+  return StyleSheet.create({
   card: { backgroundColor: colors.canvas, marginBottom: spacing.lg },
   pressed: { opacity: 0.92 },
   image: { height: 168, width: '100%', borderRadius: radii.lg },
@@ -49,3 +52,4 @@ const styles = StyleSheet.create({
   meta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   metaText: { ...typography.caption, color: colors.muted }
 });
+}

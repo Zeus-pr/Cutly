@@ -4,14 +4,26 @@ import { useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@/services/api';
-import { colors, radii, spacing, typography } from '@/constants/theme';
+import { radii, spacing, typography, type Palette } from '@/constants/theme';
+import { useThemedStyles } from '@/store/useThemeStore';
+import { usePlaceStore } from '@/store/usePlaceStore';
 import { ShopCard } from '@/components/ShopCard';
 
 const filters = ['Open now', 'Earliest', 'Nearest', 'Price'] as const;
 
 export default function Explore() {
+  const styles = useThemedStyles(exploreStyles);
   const [open, setOpen] = useState(false);
-  const { data = [] } = useQuery({ queryKey: ['explore', open], queryFn: () => api.shops({ openNow: open }) });
+  const active = usePlaceStore((state) => state.active);
+  const { data = [] } = useQuery({
+    queryKey: ['explore', open, active?.latitude, active?.longitude],
+    queryFn: () => api.shops({
+      openNow: open,
+      lat: active?.latitude ?? 23.2324,
+      lng: active?.longitude ?? 87.8615,
+      radiusKm: 30
+    })
+  });
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -47,7 +59,8 @@ export default function Explore() {
   );
 }
 
-const styles = StyleSheet.create({
+function exploreStyles(colors: Palette) {
+  return StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   content: { padding: spacing.md, paddingBottom: 120 },
   title: { ...typography.display, color: colors.ink },
@@ -58,3 +71,4 @@ const styles = StyleSheet.create({
   filterText: { ...typography.caption, color: colors.ink, fontWeight: '500' },
   filterTextActive: { color: colors.white, fontWeight: '600' }
 });
+}
