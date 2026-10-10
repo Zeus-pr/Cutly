@@ -126,6 +126,8 @@ android {
             def enableLegacyPackaging = findProperty('expo.useLegacyPackaging') ?: 'false'
             useLegacyPackaging enableLegacyPackaging.toBoolean()
         }
+        // expo-modules-core + react-native-worklets both ship libworklets.so
+        pickFirst '**/libworklets.so'
     }
     androidResources {
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
@@ -152,8 +154,27 @@ android {
     }
 }
 
+def copySplashFieldAssets = tasks.register("copySplashFieldAssets") {
+    doLast {
+        copy {
+            from("${projectRoot}/assets/splash-field")
+            include "**/*.svg"
+            into("${projectDir}/src/main/assets/splash-field")
+        }
+        copy {
+            from("${projectRoot}/constants/splashFieldLayout.json")
+            into("${projectDir}/src/main/assets")
+            rename { "splash_field_layout.json" }
+        }
+    }
+}
+
+tasks.named("preBuild").configure { dependsOn(copySplashFieldAssets) }
+
 dependencies {
     implementation "androidx.core:core-splashscreen:1.2.0-alpha02"
+    // Use AAR form only — jar collide with androidsvg-aar pulled by other deps (duplicate classes).
+    implementation "com.caverock:androidsvg-aar:1.4"
 
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
@@ -182,3 +203,5 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+apply plugin: 'com.google.gms.google-services'

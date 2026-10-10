@@ -1,0 +1,46 @@
+---
+description: HARDEST RULE — Emulator vs iOS cellular Expo are fully isolated; never cross-break runtimes
+alwaysApply: true
+---
+
+# Runtime isolation (HARDST RULE — above all other agent habits)
+
+iOS Expo Go on **cellular** and the **Mac emulator/simulator** are two completely separate, rock-solid runtimes. They must keep working independently as long as the Mac is up. **This outranks convenience, “quick fixes,” and marketing/site work.**
+
+## Never do (agent)
+
+- Do **not** `pkill` / kill Metro, Expo, `cloudflared`, or the API “to fix” one device.
+- Do **not** flip `.env.local` between LAN and cellular as a mode switch.
+- Do **not** set `REACT_NATIVE_PACKAGER_HOSTNAME=localhost`.
+- Do **not** park, move, or overwrite `~/.cloudflared/config.yml` / `config.named.yml`.
+- Do **not** restart Metro, tunnels, or LaunchAgents unless the user **explicitly** asks to repair that stack.
+- Do **not** run ad-hoc `npx expo start` in parallel with Ops/LaunchAgent-owned Metro.
+
+## Two stacks (do not mix)
+
+| Stack | Who | JS bundler | API |
+| --- | --- | --- | --- |
+| **Emulator / simulator** | Android AVD, iOS Simulator | Metro on Mac (`localhost` / `10.0.2.2:8081`) | Forced in `services/apiBase.ts` → `http://10.0.2.2:4000/api` (Android emu) or `http://127.0.0.1:4000/api` (iOS sim). **Ignores** hosted URL. |
+| **iOS Expo Go cellular** | Physical iPhone off LAN | Ops LaunchAgent `com.prajesh.cutly-expo-cellular` + Metro quick-tunnel (`EXPO_PACKAGER_PROXY_URL` / `exps://…trycloudflare.com`) | `.env.local` → `https://api.cutly.buzz/api` + named tunnel `cutly-api` → local `:4000` |
+
+Shared on Mac (both stacks need these; never tear down for the other stack):
+
+- Local API on `:4000` (`com.prajesh.cutly-api` / `scripts/cutly-api.sh`)
+- Named Cloudflare tunnel KeepAlive: LaunchAgent `com.prajesh.cutly-api-tunnel` → `cloudflared tunnel --config ~/.cloudflared/config.named.yml run cutly-api` → `api.cutly.buzz` (cellular shops die with 530/1033 if this is down)
+
+## Correct repair path
+
+1. Prefer **Ops panel** (`http://127.0.0.1:5055`) → **Start work stack** / **Outside · cellular** — not one-off shell kills.
+2. Emulator broken → fix **local API + Metro reachability only**; leave cellular tunnel + `exps://` alone.
+3. Cellular Expo broken → fix **named `cutly-api` tunnel + cellular LaunchAgent only**; leave emulator API overrides alone (`apiBase.ts`).
+4. If unsure, **ask** which stack is broken before touching processes.
+
+## `.env.local` contract
+
+- Keep `EXPO_PUBLIC_API_BASE_URL=https://api.cutly.buzz/api` for physical / cellular.
+- Emulators must **not** depend on that value; they use `getApiBaseUrl()` overrides.
+- Do not add LAN IPs into `.env.local` unless the user explicitly switches to home Wi‑Fi physical device and asks.
+
+## If you broke isolation
+
+Stop. Restore via Ops/LaunchAgents. Do not “try the other URL.” Report what is up (`:4000`, named tunnel, Metro, `exps://` host) without further kills.

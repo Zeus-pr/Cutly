@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "133193461907",
+    "project_id": "cutly-buzz",
+    "storage_bucket": "cutly-buzz.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:133193461907:android:5b5a73bc2a6ff074869d66",
+        "android_client_info": {
+          "package_name": "com.cutly.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB4ZWfCwbv7XkN6IqhjrfjmAJNj5fABOBw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

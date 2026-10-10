@@ -1,0 +1,16 @@
+---
+description: Agent workflow — skills/plugins, conflicts, docs, reuse safe free tools
+alwaysApply: true
+---
+
+# CUTLY agent workflow
+
+When changing app or backend code:
+
+1. **Use the toolbox** — Load relevant Cursor skills, MCP plugins (Mobbin, Figma, Expo, Render, etc.), and subagents when they help. Do not guess UI/infra when a plugin or skill can check.
+
+2. **Conflicts first** — Read `TASKS.md` → Conflicts and `MEMORY.md` / `PRD.md` before coding. If the request contradicts a locked decision, surface it briefly and ask or follow the documented decision.
+
+3. **Update the six knowledge docs** in the same session as the code change (see `cutly-knowledge-docs.mdc`): `PRD.md`, `ARCHITECTURE.md`, `DESIGN.md`, `RULES.md`, `TASKS.md`, `MEMORY.md`. Customer booking/explore/pay → also add/update **PS-*** partner mirror rows.
+
+4. **Don't reinvent the wheel** — Prefer existing safe, free, well-known libraries, Expo modules, platform APIs, and patterns already in the repo (or widely documented) over custom one-offs. Examples: `expo-notifications`, Linking to Google Maps, SecureStore, React Query.

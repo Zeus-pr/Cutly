@@ -19,14 +19,17 @@ import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { useFonts } from 'expo-font';
 import { Ionicons } from '@expo/vector-icons';
+import { BackButton } from '@/components/BackButton';
+import { HoursEditor } from '@/components/HoursEditor';
 import { SuccessOverlay } from '@/components/SuccessOverlay';
-import { amenities, catalogue, shopKinds, type CatalogueService, type ShopKindId } from '@/constants/catalogue';
+import { amenities, catalogueForKinds, productBrandSuggestions, shopKinds, type CatalogueService, type ShopKindId } from '@/constants/catalogue';
 import { radii, spacing, typography, type Palette } from '@/constants/theme';
 import { readCurrentPlace, type PlaceHit } from '@/services/device-location';
 import { partnerApi } from '@/services/partner';
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
+import { defaultHourDrafts, draftsToApiDays, type HourDayDraft } from '@/utils/hoursDraft';
 
-const steps = ['Name', 'Location', 'Shop type', 'Services', 'Chairs', 'Workers', 'Features', 'Photos'] as const;
+const steps = ['Name', 'Location', 'Shop type', 'Services', 'Brands', 'Chairs', 'Workers', 'Hours', 'Features', 'Photos'] as const;
 const ease = Easing.bezier(0.22, 1, 0.36, 1);
 
 export default function PartnerSetup() {
@@ -43,16 +46,22 @@ export default function PartnerSetup() {
   const [name, setName] = useState('');
   const [place, setPlace] = useState<PlaceHit | null>(null);
   const [manual, setManual] = useState('');
-  const [kind, setKind] = useState<ShopKindId | null>(null);
+  const [kinds, setKinds] = useState<ShopKindId[]>([]);
   const [picked, setPicked] = useState<CatalogueService[]>([]);
+  const [brands, setBrands] = useState<string[]>([]);
+  const [customBrand, setCustomBrand] = useState('');
   const [chairs, setChairs] = useState(2);
   const [workers, setWorkers] = useState(2);
+  const [hourDrafts, setHourDrafts] = useState<HourDayDraft[]>(defaultHourDrafts);
+  const [hoursTouched, setHoursTouched] = useState(false);
   const [chosenAmenities, setChosenAmenities] = useState<string[]>([]);
   const [photos, setPhotos] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  const menu = catalogueForKinds(kinds);
 
   useEffect(() => {
     progress.value = withTiming((step + 1) / steps.length, {
@@ -62,6 +71,37 @@ export default function PartnerSetup() {
   }, [step, reduceMotion, progress]);
 
   const fillStyle = useAnimatedStyle(() => ({ width: `${progress.value * 100}%` }));
+
+  function toggleKind(id: ShopKindId) {
+    void Haptics.selectionAsync();
+    setKinds((current) => {
+      const next = current.includes(id) ? current.filter((k) => k !== id) : [...current, id];
+      setPicked((services) => {
+        if (!next.length) return [];
+        const allowed = new Set(catalogueForKinds(next).map((s) => s.name));
+        return services.filter((s) => allowed.has(s.name));
+      });
+      return next;
+    });
+  }
+
+  function toggleBrand(name: string) {
+    void Haptics.selectionAsync();
+    setBrands((current) => (current.includes(name) ? current.filter((b) => b !== name) : [...current, name]));
+  }
+
+  function addCustomBrand() {
+    const name = customBrand.trim();
+    if (name.length < 2) return setError('Enter a brand name.');
+    if (brands.some((b) => b.toLowerCase() === name.toLowerCase())) {
+      setCustomBrand('');
+      return;
+    }
+    setError('');
+    setBrands((current) => [...current, name].slice(0, 24));
+    setCustomBrand('');
+    void Haptics.selectionAsync();
+  }
 
   function toggleService(service: CatalogueService) {
     void Haptics.selectionAsync();
@@ -85,7 +125,7 @@ export default function PartnerSetup() {
 
   async function locate() {
     setError('');
-    const next = await readCurrentPlace();
+    const next = await readCurrentPlace({ forceFresh: true });
     if (next === 'denied' || next === 'unavailable') {
       setError('Allow location, or type the area below.');
       return;
@@ -118,7 +158,7 @@ export default function PartnerSetup() {
   }
 
   async function finish() {
-    if (!kind) return setError('Choose a shop type.');
+    if (!kinds.length) return setError('Choose at least one shop type.');
     if (picked.length === 0) return setError('Choose at least one service.');
     const address = place?.address || manual.trim();
     const city = place?.city || address;
@@ -133,11 +173,17 @@ export default function PartnerSetup() {
         city,
         latitude: place?.latitude ?? 23.2324,
         longitude: place?.longitude ?? 87.8615,
-        kind,
+        kinds,
+        kind: kinds[0],
+        productBrands: brands,
         services: picked,
         chairCount: chairs,
         workersPresent: Math.min(workers, chairs)
       });
+      if (hoursTouched) {
+        const days = draftsToApiDays(hourDrafts);
+        if (days.length) await partnerApi.setHours(days);
+      }
       if (chosenAmenities.length) await partnerApi.amenities(chosenAmenities);
       if (photos.length) await partnerApi.photos(photos);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -154,28 +200,48 @@ export default function PartnerSetup() {
     setError('');
     if (step === 0 && name.trim().length < 2) return setError('Enter the shop name.');
     if (step === 1 && !place && manual.trim().length < 3) return setError('Add the shop location.');
-    if (step === 2 && !kind) return setError('Choose what kind of shop you run.');
+    if (step === 2 && kinds.length === 0) return setError('Pick at least one shop type.');
     if (step === 3 && picked.length === 0) return setError('Choose at least one service.');
-    if (step === 4 && chairs < 1) return setError('A shop needs at least one chair.');
-    if (step < 5) {
-      if (step === 4) setWorkers((count) => Math.min(count, chairs));
+    if (step === 5 && chairs < 1) return setError('A shop needs at least one seat.');
+    if (step === 7) {
+      const days = draftsToApiDays(hourDrafts);
+      if (!days.length) return setError('Keep at least one open day, or Skip for default hours.');
+      setHoursTouched(true);
+      go(8);
+      return;
+    }
+    if (step < 6) {
+      if (step === 5) setWorkers((count) => Math.min(count, chairs));
       go(step + 1);
       return;
     }
-    if (step === 5 || step === 6) {
+    if (step === 6 || step === 8) {
       go(step + 1);
       return;
     }
-    if (step === 7) await finish();
+    if (step === 9) await finish();
   }
 
   function skip() {
-    if (step === 6) {
-      go(7);
+    if (step === 4) {
+      setBrands([]);
+      go(5);
       return;
     }
-    if (step === 7) void finish();
+    if (step === 7) {
+      setHoursTouched(false);
+      setHourDrafts(defaultHourDrafts());
+      go(8);
+      return;
+    }
+    if (step === 8) {
+      go(9);
+      return;
+    }
+    if (step === 9) void finish();
   }
+
+  const canSkip = step === 4 || step >= 7;
 
   const entering = reduceMotion
     ? FadeIn.duration(180)
@@ -188,7 +254,13 @@ export default function PartnerSetup() {
       ? SlideOutLeft.duration(280).easing(ease)
       : SlideOutRight.duration(280).easing(ease);
 
-  const primaryLabel = busy ? 'Saving…' : step === 7 ? (photos.length ? 'Finish' : 'Finish without photos') : 'Continue';
+  const primaryLabel = busy
+    ? 'Saving…'
+    : step === 9
+      ? photos.length
+        ? 'Finish'
+        : 'Finish without photos'
+      : 'Continue';
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -234,22 +306,19 @@ export default function PartnerSetup() {
             {step === 2 ? (
               <>
                 <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>What kind of shop are you?</Text>
-                <Text style={styles.body}>We’ll only show services that fit this type.</Text>
+                <Text style={styles.body}>Pick all that apply — Salon, Spa, Nails, Tattoo, Piercing. We’ll show matching services next.</Text>
                 <View style={styles.kindList}>
                   {shopKinds.map((item) => {
-                    const on = kind === item.id;
+                    const on = kinds.includes(item.id);
                     return (
-                      <Pressable
-                        key={item.id}
-                        style={[styles.kindCard, on && styles.kindCardOn]}
-                        onPress={() => {
-                          void Haptics.selectionAsync();
-                          setKind(item.id);
-                          setPicked([]);
-                        }}
-                      >
-                        <Text style={[styles.kindTitle, on && styles.kindTitleOn]}>{item.label}</Text>
-                        <Text style={[styles.kindHint, on && styles.kindHintOn]}>{item.hint}</Text>
+                      <Pressable key={item.id} style={[styles.kindCard, on && styles.kindCardOn]} onPress={() => toggleKind(item.id)}>
+                        <View style={styles.featureRow}>
+                          <View style={[styles.check, on && styles.checkOn]}>{on ? <Text style={styles.checkMark}>✓</Text> : null}</View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.kindTitle, on && styles.kindTitleOn]}>{item.label}</Text>
+                            <Text style={[styles.kindHint, on && styles.kindHintOn]}>{item.hint}</Text>
+                          </View>
+                        </View>
                       </Pressable>
                     );
                   })}
@@ -257,13 +326,13 @@ export default function PartnerSetup() {
               </>
             ) : null}
 
-            {step === 3 && kind ? (
+            {step === 3 && kinds.length ? (
               <>
                 <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>Which services do you offer?</Text>
                 <Text style={styles.body}>
-                  {shopKinds.find((item) => item.id === kind)?.label} menu. Tap to keep one, then set time and price.
+                  Menu for {kinds.map((id) => shopKinds.find((k) => k.id === id)?.label).filter(Boolean).join(', ')}. Tap to keep, then set time and price.
                 </Text>
-                {catalogue[kind].map((service) => {
+                {menu.map((service) => {
                   const chosen = picked.find((item) => item.name === service.name);
                   return (
                     <View key={service.name} style={[styles.service, chosen && styles.serviceOn]}>
@@ -307,21 +376,75 @@ export default function PartnerSetup() {
 
             {step === 4 ? (
               <>
-                <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>How many chairs?</Text>
-                <Text style={styles.body}>Physical seats. Change this only when you add or remove a chair.</Text>
-                <Counter value={chairs} onChange={setChairs} min={1} />
+                <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>Which product brands do you use?</Text>
+                <Text style={styles.body}>Optional. Customers may filter by products. Tap common brands or add your own.</Text>
+                <View style={styles.brandWrap}>
+                  {productBrandSuggestions.map((brandName) => {
+                    const on = brands.includes(brandName);
+                    return (
+                      <Pressable key={brandName} style={[styles.brandChip, on && styles.brandChipOn]} onPress={() => toggleBrand(brandName)}>
+                        <Text style={[styles.brandChipText, on && styles.brandChipTextOn]}>{brandName}</Text>
+                      </Pressable>
+                    );
+                  })}
+                  {brands
+                    .filter((b) => !(productBrandSuggestions as readonly string[]).includes(b))
+                    .map((brandName) => (
+                      <Pressable key={brandName} style={[styles.brandChip, styles.brandChipOn]} onPress={() => toggleBrand(brandName)}>
+                        <Text style={[styles.brandChipText, styles.brandChipTextOn]}>{brandName} ×</Text>
+                      </Pressable>
+                    ))}
+                </View>
+                <View style={styles.customBrandRow}>
+                  <TextInput
+                    value={customBrand}
+                    onChangeText={setCustomBrand}
+                    placeholder="Add custom brand"
+                    placeholderTextColor={colors.muted}
+                    style={[styles.input, styles.customBrandInput]}
+                    onSubmitEditing={addCustomBrand}
+                    returnKeyType="done"
+                  />
+                  <Pressable style={styles.addBrandBtn} onPress={addCustomBrand}>
+                    <Text style={styles.addBrandText}>Add</Text>
+                  </Pressable>
+                </View>
               </>
             ) : null}
 
             {step === 5 ? (
               <>
-                <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>Workers in today?</Text>
-                <Text style={styles.body}>How many of the {chairs} chairs are staffed right now. Change it any day from Floor.</Text>
-                <Counter value={workers} onChange={(value) => setWorkers(Math.min(chairs, value))} min={1} />
+                <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>How many seats?</Text>
+                <Text style={styles.body}>Physical seats. Change this only when you add or remove a seat.</Text>
+                <Counter value={chairs} onChange={setChairs} min={1} />
               </>
             ) : null}
 
             {step === 6 ? (
+              <>
+                <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>Workers in today?</Text>
+                <Text style={styles.body}>How many of the {chairs} seats are staffed right now. Change it any day from Floor.</Text>
+                <Counter value={workers} onChange={(value) => setWorkers(Math.min(chairs, value))} min={1} />
+              </>
+            ) : null}
+
+            {step === 7 ? (
+              <>
+                <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>When are you open?</Text>
+                <Text style={styles.body}>
+                  IST times. Skip to use 10:00–21:00 every day. Turn a day off to close.
+                </Text>
+                <HoursEditor
+                  value={hourDrafts}
+                  onChange={(nextHours) => {
+                    setHoursTouched(true);
+                    setHourDrafts(nextHours);
+                  }}
+                />
+              </>
+            ) : null}
+
+            {step === 8 ? (
               <>
                 <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>Any shop features?</Text>
                 <Text style={styles.body}>Optional. Customers use these as filters. Skip if you want to add them later.</Text>
@@ -348,7 +471,7 @@ export default function PartnerSetup() {
               </>
             ) : null}
 
-            {step === 7 ? (
+            {step === 9 ? (
               <>
                 <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>Add shop photos?</Text>
                 <Text style={styles.body}>Optional. Up to 5. The first one becomes the cover. Skip if you’ll do this later.</Text>
@@ -366,14 +489,12 @@ export default function PartnerSetup() {
 
       <View style={styles.footer}>
         {step > 0 ? (
-          <Pressable style={styles.backBtn} onPress={() => go(step - 1)} disabled={busy}>
-            <Text style={styles.backText}>Back</Text>
-          </Pressable>
+          <BackButton onPress={() => go(step - 1)} />
         ) : (
           <View style={styles.backSpacer} />
         )}
         <View style={styles.footerActions}>
-          {step >= 6 ? (
+          {canSkip ? (
             <Pressable onPress={skip} disabled={busy}>
               <Text style={styles.skip}>Skip</Text>
             </Pressable>
@@ -468,6 +589,29 @@ function setupStyles(colors: Palette) {
     placeLabel: { ...typography.caption, color: colors.accent, fontWeight: '700', letterSpacing: 0.6 },
     placeText: { ...typography.body, color: colors.ink },
     kindList: { gap: spacing.sm },
+    brandWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    brandChip: {
+      backgroundColor: colors.surface,
+      borderRadius: radii.pill,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderWidth: 1.5,
+      borderColor: colors.line
+    },
+    brandChipOn: { borderColor: colors.accent, backgroundColor: `${colors.accent}18` },
+    brandChipText: { color: colors.ink, fontWeight: '600', fontSize: 14 },
+    brandChipTextOn: { color: colors.accentDark },
+    customBrandRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+    customBrandInput: { flex: 1, marginBottom: 0 },
+    addBrandBtn: {
+      backgroundColor: colors.accent,
+      borderRadius: radii.pill,
+      paddingHorizontal: 18,
+      height: 52,
+      alignItems: 'center',
+      justifyContent: 'center'
+    },
+    addBrandText: { color: colors.white, fontWeight: '700', fontSize: 15 },
     kindCard: {
       backgroundColor: colors.surface,
       borderRadius: radii.lg,

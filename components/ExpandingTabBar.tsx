@@ -43,7 +43,7 @@ type Props = {
 export function ExpandingTabBar({ state, descriptors, navigation, insets }: Props) {
   const colors = useColors();
   const reduced = useReducedMotion();
-  const routes = state.routes.filter((route) => !route.name.startsWith('_'));
+  const routes = (state?.routes ?? []).filter((route) => route?.name && !route.name.startsWith('_'));
   const [barWidth, setBarWidth] = useState(0);
   const [labelWidths, setLabelWidths] = useState<number[]>(() => routes.map(() => 56));
   const pillLeft = useSharedValue(0);
@@ -64,8 +64,8 @@ export function ExpandingTabBar({ state, descriptors, navigation, insets }: Prop
   useLayoutEffect(() => {
     if (barWidth <= 0 || routes.length === 0) return;
     const widths = labelWidths.length === routes.length ? labelWidths : routes.map((_, i) => labelWidths[i] ?? 56);
-    const frames = framesFor(barWidth, state.index, widths);
-    const active = frames[state.index];
+    const frames = framesFor(barWidth, state?.index ?? 0, widths);
+    const active = frames[state?.index ?? 0];
     if (!active) return;
     const first = !placed.current;
     placed.current = true;
@@ -85,7 +85,7 @@ export function ExpandingTabBar({ state, descriptors, navigation, insets }: Prop
     labelOpacity.set(reduced || first ? 1 : withTiming(1, fade));
     // Shared values are stable; the slot arrays are rebuilt each render but point at those same values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [barWidth, labelWidths, reduced, state.index]);
+  }, [barWidth, labelWidths, reduced, state?.index]);
 
   const pillStyle = useAnimatedStyle(() => ({
     left: pillLeft.get(),
@@ -101,18 +101,23 @@ export function ExpandingTabBar({ state, descriptors, navigation, insets }: Prop
     navigation.navigate(route.name);
   };
 
-  const active = routes[state.index];
+  const tabIndex = state?.index ?? 0;
+  const active = routes[tabIndex];
   const activeIcon = icons[active?.name ?? '']?.on ?? 'ellipse';
   const activeTitle = active ? descriptors[active.key]?.options.title ?? active.name : '';
 
+  if (!routes.length) {
+    return <View style={{ height: barHeight + Math.max(insets?.bottom ?? 0, 10) }} />;
+  }
+
   return (
-    <View style={[styles.wrap, { backgroundColor: colors.canvas, paddingBottom: Math.max(insets.bottom, 10) }]}>
+    <View style={[styles.wrap, { backgroundColor: colors.canvas, paddingBottom: Math.max(insets?.bottom ?? 0, 10) }]}>
       <View
         onLayout={(event) => setBarWidth(event.nativeEvent.layout.width)}
         style={[
           styles.bar,
           {
-            backgroundColor: colors.canvas === '#FFFFFF' ? colors.white : colors.surface,
+            backgroundColor: colors.surface,
             borderColor: colors.line,
           },
         ]}
@@ -129,10 +134,10 @@ export function ExpandingTabBar({ state, descriptors, navigation, insets }: Prop
             left={slots[index]!}
             width={sizes[index]!}
             label={descriptors[route.key]?.options.title ?? route.name}
-            focused={state.index === index}
+            focused={tabIndex === index}
             icon={icons[route.name]?.off ?? 'ellipse-outline'}
             color={colors.muted}
-            onPress={() => onPress(route, state.index === index)}
+            onPress={() => onPress(route, tabIndex === index)}
           />
         ))}
         <View pointerEvents="none" style={styles.measure}>

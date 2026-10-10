@@ -10,6 +10,7 @@ import { partnerApi } from '@/services/partner';
 import { useSessionStore } from '@/store/useSessionStore';
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
 
+/** Partner sign-in only — new shops apply on the website, not in-app. */
 export default function PartnerAuth() {
   const colors = useColors();
   const styles = useThemedStyles(authStyles);
@@ -17,8 +18,6 @@ export default function PartnerAuth() {
   const [fonts] = useFonts({
     PoppinsExtraBold: require('@/assets/fonts/Poppins-ExtraBold.ttf')
   });
-  const [mode, setMode] = useState<'signup' | 'signin'>('signup');
-  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -29,16 +28,9 @@ export default function PartnerAuth() {
     setBusy(true);
     setError('');
     try {
-      if (mode === 'signup') {
-        if (!name.trim()) throw new Error('Enter your name.');
-        await partnerApi.signUp(email.trim(), password, name.trim());
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        router.replace('/partner/setup');
-      } else {
-        const shop = await partnerApi.signIn(email.trim(), password);
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        router.replace(shop?.setupDone ? '/partner/(tabs)' : '/partner/setup');
-      }
+      const shop = await partnerApi.signIn(email.trim(), password);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.replace(shop?.setupDone ? '/partner/(tabs)' : '/partner/setup');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not sign in.');
     } finally {
@@ -46,25 +38,19 @@ export default function PartnerAuth() {
     }
   }
 
+  function backToCustomer() {
+    useSessionStore.getState().setAudience('customer');
+    router.replace('/auth');
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.glow} pointerEvents="none" />
       <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(380)} style={styles.form}>
         <Text style={styles.kicker}>Partner</Text>
-        <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>
-          {mode === 'signup' ? 'Create your shop account' : 'Sign in to your shop'}
-        </Text>
-        <Text style={styles.body}>Separate from a customer login, even if the email matches.</Text>
+        <Text style={[styles.title, fonts && { fontFamily: 'PoppinsExtraBold' }]}>Sign in to your shop</Text>
+        <Text style={styles.body}>Use the account ops created for your shop. New partners apply on the website.</Text>
 
-        {mode === 'signup' ? (
-          <TextInput
-            value={name}
-            onChangeText={setName}
-            placeholder="Your name"
-            placeholderTextColor={colors.muted}
-            style={styles.input}
-          />
-        ) : null}
         <TextInput
           value={email}
           onChangeText={setEmail}
@@ -78,38 +64,18 @@ export default function PartnerAuth() {
           value={password}
           onChangeText={setPassword}
           secureTextEntry
-          placeholder="Password, 8 characters or more"
+          placeholder="Password"
           placeholderTextColor={colors.muted}
           style={styles.input}
         />
         {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <Pressable style={[styles.button, busy && styles.buttonBusy]} onPress={submit} disabled={busy}>
-          <Text style={styles.buttonText}>
-            {busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}
-          </Text>
+          <Text style={styles.buttonText}>{busy ? 'Please wait…' : 'Sign in'}</Text>
         </Pressable>
 
-        <Pressable
-          style={styles.button}
-          onPress={() => {
-            setMode(mode === 'signup' ? 'signin' : 'signup');
-            setError('');
-          }}
-        >
-          <Text style={styles.buttonText}>
-            {mode === 'signup' ? 'Already a partner? Sign in' : 'New shop? Create an account'}
-          </Text>
-        </Pressable>
-
-        <Pressable
-          style={styles.button}
-          onPress={() => {
-            useSessionStore.getState().setAudience(null);
-            router.replace('/role');
-          }}
-        >
-          <Text style={styles.buttonText}>Back to customer or partner</Text>
+        <Pressable style={styles.secondary} onPress={backToCustomer}>
+          <Text style={styles.secondaryText}>Back to customer sign-in</Text>
         </Pressable>
       </Animated.View>
     </SafeAreaView>
@@ -157,6 +123,15 @@ function authStyles(colors: Palette) {
       marginTop: spacing.xs
     },
     buttonBusy: { opacity: 0.7 },
-    buttonText: { color: colors.white, fontWeight: '700', fontSize: 16 }
+    buttonText: { color: colors.white, fontWeight: '700', fontSize: 16 },
+    secondary: {
+      height: 48,
+      borderRadius: radii.pill,
+      borderWidth: 1,
+      borderColor: colors.line,
+      alignItems: 'center',
+      justifyContent: 'center'
+    },
+    secondaryText: { color: colors.ink, fontWeight: '600', fontSize: 15 }
   });
 }

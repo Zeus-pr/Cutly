@@ -8,27 +8,65 @@ const prisma = new PrismaClient();
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_COOLDOWN_MS = 30 * 1000;
 
-export type PublicUser = { id: string; email: string | null; phone: string | null; name: string | null };
+export type PublicUser = {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  name: string | null;
+  gender?: string | null;
+  inviteCode?: string | null;
+};
 
-function secret() {
+/** Fail closed if JWT_SECRET missing (SEC-10). */
+export function jwtSecret() {
   const value = process.env.JWT_SECRET;
   if (!value) throw new Error('JWT_SECRET is not set');
   return value;
 }
 
-function publicUser(user: { id: string; email: string | null; phone: string | null; name: string | null }): PublicUser {
-  return { id: user.id, email: user.email, phone: user.phone, name: user.name };
+function secret() {
+  return jwtSecret();
+}
+
+const JWT_VERIFY: jwt.VerifyOptions = { algorithms: ['HS256'] };
+
+function publicUser(user: {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  name: string | null;
+  gender?: string | null;
+  inviteCode?: string | null;
+}): PublicUser {
+  return {
+    id: user.id,
+    email: user.email,
+    phone: user.phone,
+    name: user.name,
+    gender: user.gender ?? null,
+    inviteCode: user.inviteCode ?? null
+  };
 }
 
 export function signToken(user: PublicUser, audience: 'customer' | 'partner' = 'customer') {
   return jwt.sign({ sub: user.id, email: user.email, phone: user.phone, aud: audience }, secret(), { expiresIn: '30d' });
 }
 
-export async function signUp(email: string, password: string, name?: string) {
+/** SEC-08: same message for email/phone taken — no account enumeration. */
+const SIGNUP_TAKEN = 'Could not create that account. Try another email or phone, or sign in.';
+
+export async function signUp(email: string, password: string, phone: string, name?: string) {
   const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing) throw new Error('An account with that email already exists.');
+  if (existing) throw new Error(SIGNUP_TAKEN);
+  const phoneTaken = await prisma.user.findUnique({ where: { phone } });
+  if (phoneTaken) throw new Error(SIGNUP_TAKEN);
   const user = await prisma.user.create({
-    data: { email, name: name || null, passwordHash: await bcrypt.hash(password, 10) }
+    data: {
+      email,
+      phone,
+      name: name || null,
+      passwordHash: await bcrypt.hash(password, 10)
+    }
   });
   const profile = publicUser(user);
   return { token: signToken(profile), user: profile };
@@ -37,10 +75,12 @@ export async function signUp(email: string, password: string, name?: string) {
 export async function userFromToken(token: string) {
   let payload: jwt.JwtPayload;
   try {
-    payload = jwt.verify(token, secret()) as jwt.JwtPayload;
+    payload = jwt.verify(token, secret(), JWT_VERIFY) as jwt.JwtPayload;
   } catch {
     throw new Error('Sign in again.');
   }
+  // SEC-10: reject partner tokens (and anything without customer aud).
+  if (payload.aud !== 'customer') throw new Error('Sign in again.');
   const id = typeof payload.sub === 'string' ? payload.sub : '';
   if (!id) throw new Error('Sign in again.');
   const user = await prisma.user.findUnique({ where: { id } });
@@ -48,10 +88,61 @@ export async function userFromToken(token: string) {
   return publicUser(user);
 }
 
-export async function updateProfileName(token: string, name: string) {
+export async function updateProfile(
+  token: string,
+  input: { name?: string; phone?: string; email?: string; gender?: string; inviteCode?: string }
+) {
   const current = await userFromToken(token);
-  const user = await prisma.user.update({ where: { id: current.id }, data: { name } });
+  const data: {
+    name?: string;
+    phone?: string;
+    email?: string | null;
+    gender?: string | null;
+    inviteCode?: string | null;
+  } = {};
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (!name) throw new Error('Enter your name.');
+    data.name = name;
+  }
+  if (input.phone !== undefined) {
+    const phone = input.phone.trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+      throw new Error('Enter phone with country code, like +9198…');
+    }
+    const taken = await prisma.user.findFirst({ where: { phone, NOT: { id: current.id } } });
+    if (taken) throw new Error('That phone number is already on another account.');
+    data.phone = phone;
+  }
+  if (input.email !== undefined) {
+    const email = input.email.trim().toLowerCase();
+    if (!email) {
+      data.email = null;
+    } else {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email.');
+      const taken = await prisma.user.findFirst({ where: { email, NOT: { id: current.id } } });
+      if (taken) throw new Error('That email is already on another account.');
+      data.email = email;
+    }
+  }
+  if (input.gender !== undefined) {
+    const gender = input.gender.trim().toLowerCase();
+    const allowed = new Set(['male', 'female', 'other', 'prefer_not', '']);
+    if (!allowed.has(gender)) throw new Error('Pick a gender option.');
+    data.gender = gender || null;
+  }
+  if (input.inviteCode !== undefined) {
+    const code = input.inviteCode.trim().slice(0, 32);
+    data.inviteCode = code || null;
+  }
+  if (!Object.keys(data).length) throw new Error('Nothing to update.');
+  const user = await prisma.user.update({ where: { id: current.id }, data });
   return publicUser(user);
+}
+
+/** @deprecated use updateProfile */
+export async function updateProfileName(token: string, name: string) {
+  return updateProfile(token, { name });
 }
 
 export async function signIn(email: string, password: string) {
@@ -127,7 +218,7 @@ export async function sendPhoneOtp(phone: string) {
   });
 }
 
-export async function verifyPhoneOtp(phone: string, code: string) {
+export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: string) {
   const { client, serviceSid } = await verifyService();
   let status = '';
   try {
@@ -138,8 +229,45 @@ export async function verifyPhoneOtp(phone: string, code: string) {
   }
   if (status !== 'approved') throw new Error('That code is incorrect or expired.');
   await prisma.phoneOtp.deleteMany({ where: { phone } });
-  const existing = await prisma.user.findUnique({ where: { phone } });
-  const user = existing || await prisma.user.create({ data: { phone } });
+
+  const byPhone = await prisma.user.findUnique({ where: { phone } });
+
+  // CJ-43: signed-in email/Google user without phone → attach this phone (merge).
+  if (mergeToken) {
+    try {
+      const signedIn = await userFromToken(mergeToken);
+      if (signedIn.phone && signedIn.phone !== phone) {
+        throw new Error('This account already has a different phone number.');
+      }
+      if (!signedIn.phone) {
+        if (byPhone && byPhone.id !== signedIn.id) {
+          // Phone-only stub with no email/google → fold into signed-in account.
+          if (!byPhone.email && !byPhone.googleSub && !byPhone.passwordHash) {
+            await prisma.$transaction(async (tx) => {
+              await tx.booking.updateMany({ where: { userId: byPhone.id }, data: { userId: signedIn.id } });
+              await tx.favouriteShop.updateMany({ where: { userId: byPhone.id }, data: { userId: signedIn.id } });
+              await tx.review.updateMany({ where: { userId: byPhone.id }, data: { userId: signedIn.id } });
+              await tx.notification.updateMany({ where: { userId: byPhone.id }, data: { userId: signedIn.id } });
+              await tx.user.delete({ where: { id: byPhone.id } });
+              await tx.user.update({ where: { id: signedIn.id }, data: { phone } });
+            });
+          } else {
+            throw new Error('That phone is already linked to another CUTLY account.');
+          }
+        } else {
+          await prisma.user.update({ where: { id: signedIn.id }, data: { phone } });
+        }
+        const merged = await prisma.user.findUniqueOrThrow({ where: { id: signedIn.id } });
+        const profile = publicUser(merged);
+        return { token: signToken(profile), user: profile };
+      }
+    } catch (err) {
+      if (err instanceof Error && !/Sign in again|token/i.test(err.message)) throw err;
+      // Invalid merge token → fall through to normal OTP login.
+    }
+  }
+
+  const user = byPhone || (await prisma.user.create({ data: { phone } }));
   const profile = publicUser(user);
   return { token: signToken(profile), user: profile };
 }

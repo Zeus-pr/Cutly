@@ -1,0 +1,28 @@
+---
+description: Keep CUTLY root knowledge docs (PRD, ARCHITECTURE, DESIGN, RULES, TASKS, MEMORY) updated when product or code changes
+alwaysApply: true
+---
+
+# CUTLY knowledge docs
+
+Canonical docs live at the repo root: `PRD.md`, `ARCHITECTURE.md`, `DESIGN.md`, `RULES.md`, `TASKS.md`, `MEMORY.md`.
+
+## When to update (same session as the code change)
+
+| Change type | Update |
+| --- | --- |
+| New/changed user-facing flow, audience, or non-goal | `PRD.md` |
+| Routes, API, schema, session/auth, deploy/host | `ARCHITECTURE.md` |
+| Tokens, tab bar, setup/auth UI patterns, motion | `DESIGN.md` |
+| Process, invariants, agent constraints | `RULES.md` |
+| Work started, finished, or newly scoped | `TASKS.md` (move `[ ]` / `[x]`) |
+| Env quirks, locked decisions, pitfalls, test data | `MEMORY.md` (dated note) |
+| Customer-side (CJ-*) booking/explore/pay change | **Also** append/update `TASKS.md` → **Partner setup — later backlog (PS-*)** with what partner setup / Floor / Profile must add or modify |
+
+## How
+
+- Edit only the sections that changed; keep docs concise.
+- Do not invent future features into PRD as “done”.
+- Prefer these six over stale `docs/PROJECT_INDEX.md`.
+- If the user asks for a feature that contradicts MEMORY/PRD, surface the conflict briefly before coding.
+- **Partner mirror (always):** When shipping or scoping a customer journey fix, add a `PS-*` row (or mark an existing one) so partner-side work is never forgotten. Do not block the customer fix on building PS-* unless the user asks.

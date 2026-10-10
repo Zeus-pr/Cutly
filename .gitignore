@@ -5,9 +5,16 @@
 expo-env.d.ts
 # @end expo-cli
 node_modules
+site/dist
+admin/dist
+admin/node_modules
+.run/
 .env
 .env.*
 !.env.example
 .DS_Store
 .expo/
 .opencode/
+# FCM V1 private key — never commit (google-services.json is public client config)
+secrets/
+**/fcm-service-account.json

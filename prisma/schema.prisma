@@ -8,6 +8,7 @@ datasource db {
 enum BookingStatus {
   HELD
   PAYMENT_PENDING
+  AWAITING_SHOP
   CONFIRMED
   ARRIVED
   IN_SERVICE
@@ -15,6 +16,7 @@ enum BookingStatus {
   EXPIRED
   FAILED
   CANCELLED
+  REJECTED
   NO_SHOW
 }
 enum PaymentStatus {
@@ -30,8 +32,15 @@ enum ShopKind {
   BARBER
   SALON
   PARLOUR
+  SPA
+  NAILS
   TATTOO
   PIERCING
+}
+enum WalkInStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
 }
 model Partner {
   id String @id @default(cuid())
@@ -40,6 +49,7 @@ model Partner {
   name String?
   passwordHash String?
   googleSub String? @unique
+  pushToken String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   shops Shop[]
@@ -49,6 +59,10 @@ model User {
   phone String? @unique
   email String? @unique
   name String?
+  /** male | female | other | prefer_not — optional onboarding. */
+  gender String?
+  /** Optional referral / invite code from onboarding. */
+  inviteCode String?
   passwordHash String?
   googleSub String? @unique
   pushToken String?
@@ -73,13 +87,23 @@ model Shop {
   name String
   address String
   city String
+  /** Public shop contact (E.164). Customer shop page Contact dials this. */
+  phone String?
   latitude Decimal
   longitude Decimal
   timezone String @default("Asia/Kolkata")
   isActive Boolean @default(true)
+  /** Partner Home toggle — false = closed on customer side (still listed). */
+  acceptingAppointments Boolean @default(true)
+  /** IST end of today’s hours — blocks new bookings for today only until this instant. */
+  acceptingPausedUntil DateTime?
   ownerPartnerId String? @unique
   owner Partner? @relation(fields: [ownerPartnerId], references: [id])
   kind ShopKind?
+  /** Multi-select shop types (home tiles). `kind` stays primary = kinds[0]. */
+  kinds ShopKind[] @default([])
+  /** Product brands used at the shop (setup + profile). */
+  productBrands String[] @default([])
   chairCount Int @default(1)
   setupDone Boolean @default(false)
   amenities String[] @default([])
@@ -89,6 +113,7 @@ model Shop {
   barbers Barber[]
   services ShopService[]
   bookings Booking[]
+  walkIns WalkIn[]
   favourites FavouriteShop[]
   reviews Review[]
   createdAt DateTime @default(now())
@@ -128,6 +153,8 @@ model Barber {
   breaks BarberBreak[]
   leaves BarberLeave[]
   bookings Booking[]
+  walkIns WalkIn[]
+  reviews Review[]
 }
 model BarberWorkingHours {
   id String @id @default(cuid())
@@ -155,6 +182,15 @@ model BarberLeave {
   barber Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
   @@index([barberId, startsAt])
 }
+/** Global browse tiles (Ops catalogue). Ids match customer `SERVICE_CATEGORIES`. */
+model ServiceCategory {
+  id String @id
+  label String
+  gridLabel String?
+  sortOrder Int @default(0)
+  active Boolean @default(true)
+  services Service[]
+}
 model Service {
   id String @id @default(cuid())
   name String
@@ -162,13 +198,23 @@ model Service {
   bufferMinutes Int @default(0)
   active Boolean @default(true)
   kind ShopKind?
+  /** Ops-controlled tile placement (CJ-71). Null = unassigned → client “More”. */
+  categoryId String?
+  category ServiceCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   shops ShopService[]
   bookings BookingService[]
+  @@index([categoryId])
 }
 model ShopService {
   shopId String
   serviceId String
   pricePaise Int
+  /** Shop-level duration (overrides catalogue Service for this shop). */
+  durationMinutes Int
+  /** Shop-level turnover buffer after this line. */
+  bufferMinutes Int @default(10)
+  /// Who this line is for: MEN | WOMEN | KIDS | UNISEX (menu Men/Women/Kids filter).
+  audience String @default("UNISEX")
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
   service Service @relation(fields: [serviceId], references: [id], onDelete: Cascade)
   @@id([shopId, serviceId])
@@ -184,7 +230,11 @@ model Booking {
   totalPaise Int
   advancePaise Int
   bookingCode String @unique
+  /** 4-digit visit code (Rapido/Uber style) — customer shows, partner enters to start service. */
+  verifyPin String?
   idempotencyKey String @unique
+  /** Set when customer got “waiting time started” push at slot start. */
+  waitingStartedNotifiedAt DateTime?
   createdAt DateTime @default(now())
   user User @relation(fields: [userId], references: [id])
   shop Shop @relation(fields: [shopId], references: [id])
@@ -194,6 +244,7 @@ model Booking {
   review Review?
   @@index([barberId, startsAt, endsAt])
   @@index([userId, createdAt])
+  @@index([status, startsAt])
 }
 model BookingService {
   bookingId String
@@ -209,8 +260,11 @@ model BookingPayment {
   bookingId String @unique
   provider String
   providerPaymentId String?
+  /** Amount collected so far (advance and/or shop balance). */
   amountPaise Int
   status PaymentStatus
+  /** Set when partner marks remaining balance paid at the chair. */
+  shopSettledAt DateTime?
   createdAt DateTime @default(now())
   booking Booking @relation(fields: [bookingId], references: [id])
 }
@@ -225,6 +279,22 @@ model BookingHold {
   idempotencyKey String @unique
   @@index([barberId, startsAt, expiresAt])
 }
+/** Partner floor walk-in — occupies a barber + chair like a booking (CJ-23). */
+model WalkIn {
+  id String @id @default(cuid())
+  shopId String
+  barberId String
+  startsAt DateTime
+  endsAt DateTime
+  status WalkInStatus @default(ACTIVE)
+  guestName String?
+  note String?
+  createdAt DateTime @default(now())
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  barber Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  @@index([barberId, startsAt, endsAt])
+  @@index([shopId, startsAt])
+}
 model FavouriteShop {
   userId String
   shopId String
@@ -237,13 +307,20 @@ model Review {
   id String @id @default(cuid())
   userId String
   shopId String
+  barberId String
   bookingId String @unique
+  /** Shop experience 1–5 (CJ-34). */
   rating Int
+  /** Barber on that visit 1–5. */
+  barberRating Int
   text String?
   createdAt DateTime @default(now())
   user User @relation(fields: [userId], references: [id])
   shop Shop @relation(fields: [shopId], references: [id])
+  barber Barber @relation(fields: [barberId], references: [id])
   booking Booking @relation(fields: [bookingId], references: [id])
+  @@index([shopId, createdAt])
+  @@index([barberId, createdAt])
 }
 model PhoneOtp {
   id String @id @default(cuid())
@@ -254,11 +331,30 @@ model PhoneOtp {
   @@index([phone, createdAt])
 }
 model Notification {
-  id String @id @default(cuid())
-  userId String
-  type String
-  title String
-  body String
-  readAt DateTime?
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  /** JSON string: { bookingId?, screen? } for deep links / future coupons. */
+  data      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+}
+
+/** Public Partner With Us form leads — ops email + durable inbox. */
+model PartnerLead {
+  id        String   @id @default(cuid())
+  phone     String
+  shopName  String?
+  city      String?
+  source    String   @default("partner-with-us")
+  userAgent String?
+  ipHash    String?
   createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([phone, createdAt])
 }

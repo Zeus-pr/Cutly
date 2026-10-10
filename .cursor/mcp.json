@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ui-layouts-mcp": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["./node_modules/@ui-layouts/mcp/dist/src/index.js"]
+    },
+    "magnific": {
+      "url": "https://mcp.magnific.com"
+    }
+  }
+}

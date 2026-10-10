@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
+import { BackButton } from '@/components/BackButton';
 import { SuccessOverlay } from '@/components/SuccessOverlay';
 import { amenities } from '@/constants/catalogue';
 import { radii, spacing, typography, type Palette } from '@/constants/theme';
@@ -88,9 +89,7 @@ export default function PartnerDetails() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <Pressable onPress={() => router.back()}>
-        <Text style={styles.back}>Back</Text>
-      </Pressable>
+      <BackButton />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>Features and photos</Text>
         <Text style={styles.body}>Customers use features as filters. Add up to 5 photos — first is the cover. {photos} saved so far.</Text>

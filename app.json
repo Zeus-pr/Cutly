@@ -2,6 +2,7 @@
   "expo": {
     "name": "CUTLY",
     "slug": "cutly",
+    "owner": "zeus-pr",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/cutly-icon.png",
@@ -9,26 +10,56 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/cutly-logo.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0EC9A5"
+      "image": "./assets/splash-pattern-waves.png",
+      "resizeMode": "cover",
+      "backgroundColor": "#F06B55"
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.cutly.app"
+      "bundleIdentifier": "com.cutly.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "CUTLY uses your location to show nearby shops and set your area.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "CUTLY uses your location to show nearby shops and set your area.",
+        "NSLocationAlwaysUsageDescription": "CUTLY uses your location to show nearby shops and set your area."
+      }
     },
     "android": {
       "package": "com.cutly.app",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0EC9A5"
-      }
+        "backgroundColor": "#F06B55"
+      },
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.VIBRATE"
+      ]
     },
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      "expo-location",
-      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "CUTLY uses your location to show nearby shops and set your area.",
+          "isAndroidBackgroundLocationEnabled": false,
+          "isIosBackgroundLocationEnabled": false
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/ClashGrotesk-Regular.ttf",
+            "./assets/fonts/ClashGrotesk-Medium.ttf",
+            "./assets/fonts/ClashGrotesk-Semibold.ttf",
+            "./assets/fonts/ClashGrotesk-Bold.ttf"
+          ]
+        }
+      ],
       "expo-image",
       [
         "expo-image-picker",
@@ -38,14 +69,21 @@
       ],
       "expo-splash-screen",
       "expo-status-bar",
+      "@react-native-community/datetimepicker",
       [
         "expo-notifications",
         {
-          "color": "#0EC9A5",
-          "defaultChannel": "bookings"
+          "color": "#F06B55",
+          "defaultChannel": "shop_requests_v2"
         }
       ]
     ],
+    "extra": {
+      "eas": {
+        "projectId": "9e27cd70-adcb-44ae-a7b9-ae62568b79ad"
+      },
+      "router": {}
+    },
     "experiments": {
       "typedRoutes": true
     }

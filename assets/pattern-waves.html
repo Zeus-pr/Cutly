@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#F06B55}
+  #c{position:absolute;inset:0;width:100%;height:100%}
+  #fallback{position:absolute;inset:0;background:
+    radial-gradient(circle at 20% 30%, rgba(255,255,255,.22) 0 2px, transparent 3px),
+    radial-gradient(circle at 70% 60%, rgba(255,255,255,.18) 0 2px, transparent 3px),
+    radial-gradient(circle at 40% 80%, rgba(255,255,255,.16) 0 1.5px, transparent 2.5px),
+    #F06B55;
+    background-size:28px 28px, 34px 34px, 22px 22px, auto;
+    animation: drift 8s linear infinite}
+  @keyframes drift{from{background-position:0 0,0 0,0 0,0 0}to{background-position:56px 28px,-40px 50px,30px -40px,0 0}}
+</style>
+</head>
+<body>
+<div id="fallback"></div>
+<canvas id="c"></canvas>
+<script type="module">
+import { Renderer, Program, Mesh, Triangle } from 'https://esm.sh/ogl@1.0.11';
+const canvas = document.getElementById('c');
+const fallback = document.getElementById('fallback');
+try {
+  const renderer = new Renderer({ canvas, alpha: true, antialias: true, dpr: Math.min(2, window.devicePixelRatio||1) });
+  const gl = renderer.gl;
+  gl.clearColor(0.941, 0.420, 0.333, 1);
+  const geometry = new Triangle(gl);
+  const program = new Program(gl, {
+    vertex: `attribute vec2 position; void main(){ gl_Position=vec4(position,0.,1.); }`,
+    fragment: `precision highp float;
+uniform float uTime; uniform vec2 uRes; uniform vec3 uBg; uniform vec3 uFg;
+void main(){
+  vec2 uv = gl_FragCoord.xy / uRes;
+  float aspect = uRes.x / max(uRes.y, 1.);
+  vec2 p = (uv - .5) * vec2(aspect, 1.);
+  float t = uTime * 0.35;
+  float wave = sin(p.x*6. + t*1.2)*0.08 + sin(p.y*5. - t)*0.06 + sin((p.x+p.y)*4. + t*0.7)*0.05;
+  float d = length(p);
+  float silk = sin((p.x*18. + wave*40.) + t) * sin((p.y*16. - wave*30.) + t*1.1);
+  float dots = smoothstep(0.55, 0.2, abs(fract((uv.x+wave)*28.)-0.5)+abs(fract((uv.y-wave)*22.)-0.5));
+  float mark = clamp(silk*0.35 + dots*0.85, 0., 1.);
+  vec3 col = mix(uBg, uFg, mark * (0.45 + 0.35*(1.-d)));
+  gl_FragColor = vec4(col, 1.);
+}` ,
+    uniforms: {
+      uTime: { value: 0 },
+      uRes: { value: [1,1] },
+      uBg: { value: [0.941, 0.420, 0.333] },
+      uFg: { value: [1.0, 0.92, 0.88] }
+    }
+  });
+  const mesh = new Mesh(gl, { geometry, program });
+  function resize(){
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w,h);
+    program.uniforms.uRes.value = [w * renderer.dpr, h * renderer.dpr];
+  }
+  window.addEventListener('resize', resize); resize();
+  fallback.style.display='none';
+  let raf;
+  function frame(t){
+    program.uniforms.uTime.value = t * 0.001;
+    renderer.render({ scene: mesh });
+    raf = requestAnimationFrame(frame);
+  }
+  raf = requestAnimationFrame(frame);
+} catch (e) {
+  canvas.style.display='none';
+}
+</script>
+</body>
+</html>

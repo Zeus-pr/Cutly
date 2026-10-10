@@ -1,8 +1,9 @@
+import { getApiBaseUrl } from '@/services/apiBase';
 import { useSessionStore } from '@/store/useSessionStore';
 
-const base = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://10.0.2.2:4000/api';
+const base = getApiBaseUrl();
 
-type SessionUser = { id: string; email: string | null; phone: string | null; name: string | null };
+type SessionUser = { id: string; email: string | null; phone: string | null; name: string | null; gender?: string | null };
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   let response: Response;
@@ -39,6 +40,16 @@ export async function refreshProfile() {
 }
 
 export async function updateProfileName(name: string) {
+  return updateProfile({ name });
+}
+
+export async function updateProfile(input: {
+  name?: string;
+  phone?: string;
+  email?: string;
+  gender?: string;
+  inviteCode?: string;
+}) {
   const token = useSessionStore.getState().accessToken;
   if (!token) throw new Error('Sign in again.');
   let response: Response;
@@ -46,19 +57,20 @@ export async function updateProfileName(name: string) {
     response = await fetch(`${base}/auth/profile`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ name })
+      body: JSON.stringify(input)
     });
   } catch {
     throw new Error('Cannot reach the CUTLY server. Start it with npm run backend:dev.');
   }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Could not save your name.');
+  if (!response.ok) throw new Error(payload.error || 'Could not save profile.');
   const user = payload.data as SessionUser;
   useSessionStore.getState().setProfile(user);
 }
 
 export const auth = {
-  signUp: async (email: string, password: string) => save(await post('/auth/signup', { email, password })),
+  signUp: async (email: string, password: string, phone: string) =>
+    save(await post('/auth/signup', { email, password, phone })),
   signIn: async (email: string, password: string) => save(await post('/auth/login', { email, password })),
   google: async (idToken: string) => save(await post('/auth/google', { idToken })),
   sendOtp: (phone: string) => post<{ sent: boolean }>('/auth/otp/send', { phone }),

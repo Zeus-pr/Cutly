@@ -1,16 +1,22 @@
 import { useState, type ReactNode } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { appAlert, appConfirm } from '@/store/useDialogStore';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { radii, spacing, typography, type Palette } from '@/constants/theme';
+import {
+  getPushRegisterStatus,
+  registerPartnerPushNotifications
+} from '@/services/notifications';
 import { partnerApi } from '@/services/partner';
 import { useSessionStore } from '@/store/useSessionStore';
 import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
 
 const preferences = [
+  { label: 'Shop settings', icon: 'storefront-outline' as const, action: 'settings' as const },
   { label: 'Shop features & photos', icon: 'images-outline' as const, action: 'details' as const },
-  { label: 'Notifications', icon: 'notifications-outline' as const, action: null },
+  { label: 'Notifications', icon: 'notifications-outline' as const, action: 'notifications' as const },
   { label: 'Help & support', icon: 'help-circle-outline' as const, action: null },
   { label: 'Privacy & terms', icon: 'shield-checkmark-outline' as const, action: null }
 ];
@@ -27,20 +33,16 @@ export default function PartnerProfile() {
   const [deleting, setDeleting] = useState(false);
 
   function confirmDelete() {
-    Alert.alert(
-      'Delete partner account?',
-      'This removes your shop, bookings, photos, and login. This cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete everything',
-          style: 'destructive',
-          onPress: () => {
-            void removeAccount();
-          }
-        }
-      ]
-    );
+    appConfirm({
+      title: 'Delete partner account?',
+      message: 'This removes your shop, bookings, photos, and login. This cannot be undone.',
+      cancelLabel: 'Cancel',
+      confirmLabel: 'Delete everything',
+      destructive: true,
+      onConfirm: () => {
+        void removeAccount();
+      }
+    });
   }
 
   async function removeAccount() {
@@ -48,10 +50,13 @@ export default function PartnerProfile() {
     setDeleting(true);
     try {
       await partnerApi.deleteAccount();
-      useSessionStore.getState().clearPartner();
-      router.replace('/role');
+      const session = useSessionStore.getState();
+      session.clearPartner();
+      session.passLaunch();
+      session.setAudience('customer');
+      router.replace('/auth');
     } catch (err) {
-      Alert.alert('Could not delete', err instanceof Error ? err.message : 'Try again.');
+      appAlert('Could not delete', err instanceof Error ? err.message : 'Try again.');
     } finally {
       setDeleting(false);
     }
@@ -73,11 +78,11 @@ export default function PartnerProfile() {
 
         <View style={styles.shortcuts}>
           <Pressable style={styles.shortcut} onPress={() => router.push('/partner/(tabs)/floor')}>
-            <Ionicons name="grid-outline" size={22} color={colors.limeDark} />
+            <Ionicons name="grid-outline" size={22} color={colors.accentDark} />
             <Text style={styles.shortcutText}>Today’s floor</Text>
           </Pressable>
           <Pressable style={styles.shortcut} onPress={() => router.push('/partner/details')}>
-            <Ionicons name="storefront-outline" size={22} color={colors.limeDark} />
+            <Ionicons name="storefront-outline" size={22} color={colors.accentDark} />
             <Text style={styles.shortcutText}>Shop details</Text>
           </Pressable>
         </View>
@@ -89,20 +94,37 @@ export default function PartnerProfile() {
               <Text style={styles.rowText}>Dark / light mode</Text>
               <Text style={styles.rowHint}>{dark ? 'Dark' : 'Light'}</Text>
             </View>
-            <Switch
-              value={dark}
-              onValueChange={(value) => useThemeStore.getState().setDark(value)}
-              trackColor={{ false: '#D5D8D7', true: colors.accent }}
-              thumbColor={colors.white}
-              accessibilityLabel="Dark mode"
-            />
+            <View style={styles.switchWrap}>
+              <Switch
+                value={dark}
+                onValueChange={(value) => useThemeStore.getState().setDark(value)}
+                trackColor={{ false: '#D5D8D7', true: colors.accent }}
+                thumbColor={colors.white}
+                ios_backgroundColor="#D5D8D7"
+                accessibilityLabel="Dark mode"
+              />
+            </View>
           </View>
           {preferences.map((item, index) => (
             <Pressable
               key={item.label}
               style={[styles.row, index === preferences.length - 1 && styles.rowLast]}
               onPress={() => {
+                if (item.action === 'settings') router.push('/partner/settings');
                 if (item.action === 'details') router.push('/partner/details');
+                if (item.action === 'notifications') {
+                  void (async () => {
+                    await registerPartnerPushNotifications();
+                    const status = getPushRegisterStatus();
+                    appAlert(
+                      status.ok ? 'Alerts on' : 'Alerts not fully linked',
+                      status.ok
+                        ? 'This phone will get shop request notifications with sound.'
+                        : status.error ||
+                            'Keep Partner Home open for request sounds. Rebuild the APK after FCM setup if remote push still fails.'
+                    );
+                  })();
+                }
               }}
             >
               <Ionicons name={item.icon} size={20} color={colors.ink} />
@@ -116,8 +138,11 @@ export default function PartnerProfile() {
           <Pressable
             style={styles.row}
             onPress={() => {
-              useSessionStore.getState().clearPartner();
-              router.replace('/role');
+              const session = useSessionStore.getState();
+              session.clearPartner();
+              session.passLaunch();
+              session.setAudience('customer');
+              router.replace('/auth');
             }}
           >
             <Ionicons name="log-out-outline" size={20} color={colors.danger} />
@@ -198,6 +223,13 @@ function profileStyles(colors: Palette) {
     rowCopy: { flex: 1 },
     rowText: { flex: 1, color: colors.ink, fontSize: 15, fontWeight: '500' },
     rowHint: { color: colors.muted, fontSize: 12, marginTop: 2 },
+    switchWrap: {
+      marginLeft: 'auto',
+      justifyContent: 'center',
+      alignItems: 'center',
+      height: 36,
+      minWidth: 52
+    },
     logout: { color: colors.danger, fontWeight: '600' }
   });
 }

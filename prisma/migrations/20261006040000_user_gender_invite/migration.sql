@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "gender" TEXT;
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "inviteCode" TEXT;

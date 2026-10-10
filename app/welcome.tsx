@@ -1,37 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, PermissionsAndroid, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useFonts } from 'expo-font';
-import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { radii, spacing, typography, type Palette } from '@/constants/theme';
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
-import { placeFromGeocode } from '@/services/device-location';
+import { DEFAULT_PLACE, readCurrentPlace, searchPlaces } from '@/services/device-location';
 import { usePlaceStore } from '@/store/usePlaceStore';
 import { useSessionStore } from '@/store/useSessionStore';
 
 const pointers = [
   { icon: 'time-outline' as const, title: 'Real-time availability', body: 'See open slots as they happen' },
-  { icon: 'storefront-outline' as const, title: 'Trusted barber shops', body: 'Rated shops near you' },
+  { icon: 'storefront-outline' as const, title: 'Trusted shops', body: 'Rated shops near you' },
   { icon: 'shield-checkmark-outline' as const, title: 'Easy & secure booking', body: 'Hold a slot and pay a small advance' }
 ];
-
-function within<T>(promise: Promise<T>, ms: number): Promise<T | null> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(null), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve(null);
-      }
-    );
-  });
-}
 
 export default function Welcome() {
   const colors = useColors();
@@ -57,6 +40,9 @@ export default function Welcome() {
   function finish(nextCity?: string) {
     if (left.current) return;
     left.current = true;
+    if (!usePlaceStore.getState().active) {
+      usePlaceStore.getState().select({ ...DEFAULT_PLACE, originKind: 'default' });
+    }
     if (nextCity?.trim()) useSessionStore.getState().setCity(nextCity);
     useSessionStore.getState().passIntro();
     router.replace('/auth');
@@ -72,39 +58,43 @@ export default function Welcome() {
     setBusy(true);
     const deadline = setTimeout(() => finish(), 4000);
     try {
-      const fine = PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION;
-      let granted = await PermissionsAndroid.check(fine);
-      if (!granted) {
-        const result = await PermissionsAndroid.request(fine);
-        granted = result === PermissionsAndroid.RESULTS.GRANTED;
-      }
-      if (!granted) {
-        clearTimeout(deadline);
-        finish();
-        return;
-      }
-      const last = await within(Location.getLastKnownPositionAsync(), 800);
-      const position = last ?? await within(
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low }),
-        2000
-      );
+      const place = await readCurrentPlace();
       clearTimeout(deadline);
-      if (!position) {
-        finish();
+      if (place === 'denied' || place === 'unavailable') {
+        usePlaceStore.getState().select({ ...DEFAULT_PLACE, originKind: 'default' });
+        finish(DEFAULT_PLACE.city);
         return;
       }
-      const places = await within(Location.reverseGeocodeAsync(position.coords), 1500);
-      const first = places?.[0];
-      if (first) {
-        const hit = placeFromGeocode(first, position.coords);
-        usePlaceStore.getState().select(hit);
+      usePlaceStore.getState().select({ ...place, originKind: 'gps' });
+      finish(place.city);
+    } catch {
+      clearTimeout(deadline);
+      usePlaceStore.getState().select({ ...DEFAULT_PLACE, originKind: 'default' });
+      finish(DEFAULT_PLACE.city);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function continueManualCity() {
+    if (busy || left.current) return;
+    const q = city.trim();
+    if (!q) {
+      usePlaceStore.getState().select({ ...DEFAULT_PLACE, originKind: 'default' });
+      finish(DEFAULT_PLACE.city);
+      return;
+    }
+    setBusy(true);
+    try {
+      const hits = await searchPlaces(q);
+      const hit = hits[0];
+      if (hit) {
+        usePlaceStore.getState().select({ ...hit, originKind: 'search' });
         finish(hit.city);
         return;
       }
-      finish();
-    } catch {
-      clearTimeout(deadline);
-      finish();
+      usePlaceStore.getState().select({ ...DEFAULT_PLACE, originKind: 'default' });
+      finish(q);
     } finally {
       setBusy(false);
     }
@@ -135,18 +125,18 @@ export default function Welcome() {
       >
         <View style={[styles.page, { width, height: pageHeight }]}>
           <Text style={[styles.logo, loaded && styles.logoFont]}>CutLy</Text>
-          <Text style={[styles.tagline, loaded && styles.taglineFont]}>GROOMING MADE EASY</Text>
-          <Text style={styles.pitch}>Find a barber.{'\n'}Book instantly.</Text>
+          <Text style={[styles.tagline, loaded && styles.taglineFont]}>BOOKING MADE EASY</Text>
+          <Text style={styles.pitch}>Find a shop.{'\n'}Book instantly.</Text>
         </View>
 
         <View style={[styles.page, styles.pageStart, { width, height: pageHeight }]}>
-          <Text style={styles.headline}>Look Sharp{'\n'}Every Day</Text>
-          <Text style={styles.sub}>Find trusted barber shops near you and book in seconds.</Text>
+          <Text style={styles.headline}>Book a visit{'\n'}in seconds</Text>
+          <Text style={styles.sub}>Find trusted shops near you and book in seconds.</Text>
         </View>
 
         <View style={[styles.page, styles.pageStart, { width, height: pageHeight }]}>
-          <Text style={styles.headline}>Look Sharp{'\n'}Every Day</Text>
-          <Text style={styles.sub}>Find trusted barber shops near you and book in seconds.</Text>
+          <Text style={styles.headline}>Book a visit{'\n'}in seconds</Text>
+          <Text style={styles.sub}>Find trusted shops near you and book in seconds.</Text>
           <View style={styles.points}>
             {pointers.map((item) => (
               <View key={item.title} style={styles.point}>
@@ -167,7 +157,7 @@ export default function Welcome() {
             <Ionicons name="location" size={36} color={colors.accent} />
           </View>
           <Text style={styles.headlineCenter}>Allow location access</Text>
-          <Text style={styles.subCenter}>Find nearby barber shops and see live availability.</Text>
+          <Text style={styles.subCenter}>Find nearby shops and see live availability.</Text>
           {manual ? (
             <TextInput
               value={city}
@@ -211,8 +201,8 @@ export default function Welcome() {
           </>
         ) : null}
         {page === 3 && manual ? (
-          <Pressable style={styles.glass} onPress={() => finish(city)}>
-            <Text style={styles.glassText}>Continue</Text>
+          <Pressable style={styles.glass} disabled={busy} onPress={() => void continueManualCity()}>
+            <Text style={styles.glassText}>{busy ? 'Finding…' : 'Continue'}</Text>
           </Pressable>
         ) : null}
       </View>
@@ -230,7 +220,7 @@ function welcomeStyles(colors: Palette) {
     width: 180,
     height: 180,
     borderRadius: 90,
-    backgroundColor: 'rgba(14,201,165,0.22)'
+    backgroundColor: 'rgba(240,107,85,0.22)'
   },
   orbBottom: {
     position: 'absolute',
@@ -239,7 +229,7 @@ function welcomeStyles(colors: Palette) {
     width: 220,
     height: 220,
     borderRadius: 110,
-    backgroundColor: 'rgba(14,201,165,0.16)'
+    backgroundColor: 'rgba(240,107,85,0.16)'
   },
   skip: { position: 'absolute', top: 64, right: spacing.lg, zIndex: 2 },
   skipText: { ...typography.body, color: colors.muted },
@@ -261,7 +251,7 @@ function welcomeStyles(colors: Palette) {
     width: 44,
     height: 44,
     borderRadius: 14,
-    backgroundColor: 'rgba(14,201,165,0.12)',
+    backgroundColor: 'rgba(240,107,85,0.12)',
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -272,7 +262,7 @@ function welcomeStyles(colors: Palette) {
     width: 96,
     height: 96,
     borderRadius: 48,
-    backgroundColor: 'rgba(14,201,165,0.16)',
+    backgroundColor: 'rgba(240,107,85,0.16)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.8)',
     alignItems: 'center',
@@ -295,12 +285,12 @@ function welcomeStyles(colors: Palette) {
   glass: {
     height: 54,
     borderRadius: radii.pill,
-    backgroundColor: 'rgba(14,201,165,0.92)',
+    backgroundColor: colors.accent,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.75)',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#0EC9A5',
+    shadowColor: colors.accent,
     shadowOpacity: 0.3,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 10 },

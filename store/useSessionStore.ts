@@ -8,8 +8,12 @@ type SessionState = {
   phone: string | null;
   email: string | null;
   name: string | null;
+  /** male | female | other | prefer_not — from /auth/me. */
+  gender: string | null;
   city: string;
   introDone: boolean;
+  /** Session-only: PatternWaves launch → Get Started tapped. */
+  launchDone: boolean;
   hydrated: boolean;
   audience: Audience | null;
   partnerToken: string | null;
@@ -19,9 +23,15 @@ type SessionState = {
   setPartnerSession: (token: string, email: string | null, name: string | null, setupDone: boolean) => void;
   markSetup: (setupDone: boolean) => void;
   clearPartner: () => void;
-  setProfile: (profile: { phone?: string | null; email?: string | null; name?: string | null }) => void;
+  setProfile: (profile: {
+    phone?: string | null;
+    email?: string | null;
+    name?: string | null;
+    gender?: string | null;
+  }) => void;
   setCity: (city: string) => void;
   passIntro: () => void;
+  passLaunch: () => void;
   hydrate: () => Promise<void>;
   clear: () => void;
 };
@@ -30,6 +40,7 @@ const tokenKey = 'cutly.accessToken';
 const phoneKey = 'cutly.phone';
 const emailKey = 'cutly.email';
 const nameKey = 'cutly.name';
+const genderKey = 'cutly.gender';
 const cityKey = 'cutly.city';
 const audienceKey = 'cutly.audience';
 const partnerTokenKey = 'cutly.partnerToken';
@@ -46,8 +57,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   phone: null,
   email: null,
   name: null,
+  gender: null,
   city: 'Burdwan',
   introDone: false,
+  launchDone: false,
   hydrated: false,
   audience: null,
   partnerToken: null,
@@ -64,12 +77,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const next = {
       phone: profile.phone === undefined ? get().phone : profile.phone,
       email: profile.email === undefined ? get().email : profile.email,
-      name: profile.name === undefined ? get().name : profile.name
+      name: profile.name === undefined ? get().name : profile.name,
+      gender: profile.gender === undefined ? get().gender : profile.gender
     };
     set(next);
     void SecureStore.setItemAsync(phoneKey, next.phone || '');
     void SecureStore.setItemAsync(emailKey, next.email || '');
     void SecureStore.setItemAsync(nameKey, next.name || '');
+    void SecureStore.setItemAsync(genderKey, next.gender || '');
   },
   setCity: (city) => {
     const next = city.trim() || 'Burdwan';
@@ -78,7 +93,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
   setAudience: (audience) => {
     set({ audience });
-    // Choice is session-only until sign-in. Cold start without a token returns to the role gate.
+    // Session-only until sign-in. Cold start without a token lands on customer auth.
   },
   setPartnerSession: (partnerToken, email, name, setupDone) => {
     set({ partnerToken, audience: 'partner', email, name, setupDone });
@@ -99,42 +114,56 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     void SecureStore.setItemAsync(setupKey, '0');
   },
   passIntro: () => set({ introDone: true }),
+  passLaunch: () => set({ launchDone: true }),
   hydrate: async () => {
-    const [accessToken, phone, email, name, city, partnerToken, partnerEmail, partnerName, setup] = await Promise.all([
+    // Fast path — only what SessionGate needs to reach home (cuts cold-start SecureStore waits).
+    const [accessToken, name, partnerToken, partnerName, setup] = await Promise.all([
       SecureStore.getItemAsync(tokenKey),
-      SecureStore.getItemAsync(phoneKey),
-      SecureStore.getItemAsync(emailKey),
       SecureStore.getItemAsync(nameKey),
-      SecureStore.getItemAsync(cityKey),
       SecureStore.getItemAsync(partnerTokenKey),
-      SecureStore.getItemAsync(partnerEmailKey),
       SecureStore.getItemAsync(partnerNameKey),
       SecureStore.getItemAsync(setupKey)
     ]);
-    // Audience only sticks after an actual sign-in. Unsigned users always see the role gate.
     const nextAudience: Audience | null = partnerToken ? 'partner' : accessToken ? 'customer' : null;
-    if (!nextAudience) void SecureStore.deleteItemAsync(audienceKey);
-    else void SecureStore.setItemAsync(audienceKey, nextAudience);
     const partnerSession = nextAudience === 'partner';
     set({
       accessToken,
-      phone: phone || null,
-      email: (partnerSession ? partnerEmail : email) || null,
       name: (partnerSession ? partnerName : name) || null,
-      city: city || 'Burdwan',
       audience: nextAudience,
       partnerToken,
       setupDone: partnerSession && setup === '1',
       introDone: false,
+      launchDone: false,
       hydrated: true
+    });
+    if (!nextAudience) void SecureStore.deleteItemAsync(audienceKey);
+    else void SecureStore.setItemAsync(audienceKey, nextAudience);
+
+    // Slow path — non-blocking for first paint.
+    void Promise.all([
+      SecureStore.getItemAsync(phoneKey),
+      SecureStore.getItemAsync(emailKey),
+      SecureStore.getItemAsync(cityKey),
+      SecureStore.getItemAsync(partnerEmailKey),
+      SecureStore.getItemAsync(genderKey)
+    ]).then(([phone, email, city, partnerEmail, gender]) => {
+      const cur = get();
+      const partner = Boolean(cur.partnerToken);
+      set({
+        phone: phone || null,
+        email: (partner ? partnerEmail : email) || null,
+        gender: gender || null,
+        city: city || cur.city || 'Burdwan'
+      });
     });
   },
   clear: () => {
-    set({ accessToken: null, phone: null, email: null, name: null, introDone: false, audience: null });
+    set({ accessToken: null, phone: null, email: null, name: null, gender: null, introDone: false, launchDone: false, audience: null });
     void SecureStore.deleteItemAsync(tokenKey);
     void SecureStore.deleteItemAsync(phoneKey);
     void SecureStore.deleteItemAsync(emailKey);
     void SecureStore.deleteItemAsync(nameKey);
+    void SecureStore.deleteItemAsync(genderKey);
     void SecureStore.deleteItemAsync(audienceKey);
   }
 }));

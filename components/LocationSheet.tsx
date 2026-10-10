@@ -1,27 +1,24 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
-import {
-  AccessibilityInfo,
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  TextInput,
-  View
-} from 'react-native';
+import { AccessibilityInfo, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Location from 'expo-location';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 import { radii, spacing, typography, type Palette } from '@/constants/theme';
+import { appAlert, appConfirm } from '@/store/useDialogStore';
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
-import { distanceKm, readCurrentPlace, searchPlaces, type PlaceHit } from '@/services/device-location';
+import {
+  distanceKm,
+  openLocationSettings,
+  peekCachedPlace,
+  readCurrentPlace,
+  searchPlaces,
+  type PlaceHit
+} from '@/services/device-location';
 import { usePlaceStore, type SavedPlace } from '@/store/usePlaceStore';
 import { useSessionStore } from '@/store/useSessionStore';
+import { isDefaultPlaceCoords } from '@/utils/placeTrust';
 
 const labels = ['Home', 'Work', 'Other'] as const;
 const sheetEase = Easing.bezier(0.32, 0.72, 0, 1);
@@ -60,21 +57,18 @@ export function LocationSheet() {
     setQuery('');
     setResults([]);
     setAdding(false);
-    setHereStatus('loading');
-    void readCurrentPlace().then((place) => {
-      if (!usePlaceStore.getState().sheetOpen) return;
-      if (place === 'denied') {
-        setHereStatus('denied');
-        return;
-      }
-      if (place === 'unavailable') {
-        setHereStatus('unavailable');
-        return;
-      }
+    setHere(null);
+    setHereStatus('idle');
+    let cancelled = false;
+    // Cache only — never start a fresh GPS while the sheet Modal is open.
+    void peekCachedPlace().then((place) => {
+      if (cancelled || !usePlaceStore.getState().sheetOpen || !place) return;
       setHere(place);
       setGps(place);
-      setHereStatus('idle');
     });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   useLayoutEffect(() => {
@@ -115,24 +109,99 @@ export function LocationSheet() {
 
   function choose(place: PlaceHit, savedId?: string | null) {
     void Haptics.selectionAsync();
-    usePlaceStore.getState().select({ ...place, savedId: savedId ?? null });
+    usePlaceStore.getState().select({
+      ...place,
+      savedId: savedId ?? null,
+      originKind: savedId ? 'saved' : 'search'
+    });
   }
 
-  function useHere() {
-    if (here) {
-      choose(here);
-      return;
-    }
-    setHereStatus('loading');
-    void readCurrentPlace().then((place) => {
-      if (place === 'denied' || place === 'unavailable') {
-        setHereStatus(place);
-        return;
-      }
-      setHere(place);
-      setGps(place);
-      choose(place);
+  function applyPlace(place: PlaceHit) {
+    setHere(place);
+    setGps(place);
+    setHereStatus('idle');
+    void Haptics.selectionAsync();
+    usePlaceStore.getState().select({
+      ...place,
+      originKind: isDefaultPlaceCoords(place) ? 'default' : 'gps'
     });
+  }
+
+  /**
+   * Same pattern as Maps / Uber / Swiggy:
+   * 1) last-known instantly  2) refine with fresh fix  3) never hang on permission re-request
+   */
+  function useHere() {
+    if (hereStatus === 'loading') return;
+    setHereStatus('loading');
+
+    void (async () => {
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        let granted = status === 'granted';
+        if (!granted) {
+          const asked = await Location.requestForegroundPermissionsAsync();
+          granted = asked.status === 'granted';
+        }
+        if (!granted) {
+          setHereStatus('denied');
+          appAlert(
+            'Allow location',
+            'CUTLY needs location to set your area. Enable it in Settings if you denied it earlier.',
+            [
+              { label: 'Not now', role: 'cancel' },
+              { label: 'Open Settings', role: 'confirm', onPress: () => void openLocationSettings() }
+            ]
+          );
+          return;
+        }
+
+        // Instant path — last known (what other apps show first).
+        const cached = await peekCachedPlace();
+        if (cached) {
+          applyPlace(cached);
+          // Refine in background after sheet closes (no Modal → fresh GPS can run).
+          void readCurrentPlace({ forceFresh: true }).then((fresh) => {
+            if (fresh === 'denied' || fresh === 'unavailable') return;
+            if (
+              Math.abs(fresh.latitude - cached.latitude) < 0.0003 &&
+              Math.abs(fresh.longitude - cached.longitude) < 0.0003
+            ) {
+              return;
+            }
+            usePlaceStore.getState().select({
+              ...fresh,
+              originKind: isDefaultPlaceCoords(fresh) ? 'default' : 'gps'
+            });
+          });
+          return;
+        }
+
+        // No cache — need a fresh fix (settings dialog disabled under Modal).
+        const place = await readCurrentPlace({ forceFresh: true });
+        if (place === 'denied') {
+          setHereStatus('denied');
+          appAlert('Allow location', 'Enable location for CUTLY in Settings.', [
+            { label: 'Not now', role: 'cancel' },
+            { label: 'Open Settings', role: 'confirm', onPress: () => void openLocationSettings() }
+          ]);
+          return;
+        }
+        if (place === 'unavailable') {
+          setHereStatus('unavailable');
+          appAlert(
+            'No location yet',
+            'Open Google Maps once so Android has a last-known position, then try again — or search for your area.',
+            [{ label: 'OK', role: 'confirm' }]
+          );
+          return;
+        }
+        applyPlace(place);
+      } catch (err) {
+        setHereStatus('unavailable');
+        appAlert('Location failed', err instanceof Error ? err.message : 'Could not read location.');
+      }
+    })();
   }
 
   function keep(place: PlaceHit) {
@@ -141,10 +210,14 @@ export function LocationSheet() {
   }
 
   function confirmRemove(place: SavedPlace) {
-    Alert.alert(`Remove ${place.label}?`, place.address, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: () => usePlaceStore.getState().remove(place.id) }
-    ]);
+    appConfirm({
+      title: `Remove ${place.label}?`,
+      message: place.address,
+      cancelLabel: 'Cancel',
+      confirmLabel: 'Remove',
+      destructive: true,
+      onConfirm: () => usePlaceStore.getState().remove(place.id)
+    });
   }
 
   const backdropStyle = useAnimatedStyle(() => ({ opacity: progress.value }));
@@ -152,13 +225,14 @@ export function LocationSheet() {
     transform: [{ translateY: (1 - progress.value) * 640 }]
   }));
 
-  const hereLine = hereStatus === 'loading'
-    ? 'Finding your area…'
-    : hereStatus === 'denied'
-      ? 'Location permission is off'
-      : hereStatus === 'unavailable'
-        ? 'GPS is unavailable. Search instead.'
-        : here?.address;
+  const hereLine =
+    hereStatus === 'loading'
+      ? 'Finding your area…'
+      : hereStatus === 'denied'
+        ? 'Allow location when prompted, or open Settings'
+        : hereStatus === 'unavailable'
+          ? 'Tap again, or search for your area'
+          : here?.address || 'Tap to use GPS';
 
   return (
     <Modal visible={open} transparent animationType="none" statusBarTranslucent onRequestClose={dismiss}>
@@ -204,7 +278,7 @@ export function LocationSheet() {
                 {results.map((place) => (
                   <Pressable key={`${place.latitude}-${place.longitude}`} style={styles.row} onPress={() => (adding ? keep(place) : choose(place))}>
                     <View style={styles.rowIcon}>
-                      <Ionicons name="location-outline" size={18} color={colors.limeDark} />
+                      <Ionicons name="location-outline" size={18} color={colors.accentDark} />
                     </View>
                     <View style={styles.rowCopy}>
                       <Text style={styles.rowTitle}>{place.area}</Text>
@@ -220,7 +294,7 @@ export function LocationSheet() {
                   <>
                     <Pressable style={styles.row} onPress={useHere}>
                       <View style={styles.rowIcon}>
-                        <Ionicons name="locate" size={18} color={colors.limeDark} />
+                        <Ionicons name="locate" size={18} color={colors.accentDark} />
                       </View>
                       <View style={styles.rowCopy}>
                         <Text style={styles.currentTitle}>Use your current location</Text>
@@ -230,7 +304,7 @@ export function LocationSheet() {
                     </Pressable>
                     <Pressable style={styles.row} onPress={() => setAdding(true)}>
                       <View style={styles.rowIcon}>
-                        <Ionicons name="add" size={20} color={colors.limeDark} />
+                        <Ionicons name="add" size={20} color={colors.accentDark} />
                       </View>
                       <View style={styles.rowCopy}>
                         <Text style={styles.currentTitle}>Add new address</Text>
@@ -288,7 +362,7 @@ function SavedCard({
   return (
     <Pressable style={styles.card} onPress={onOpen}>
       <View style={styles.cardIcon}>
-        <Ionicons name={iconFor(place.label)} size={22} color={colors.limeDark} />
+        <Ionicons name={iconFor(place.label)} size={22} color={colors.accentDark} />
         {here ? <Text style={styles.here}>You're here</Text> : km !== null ? <Text style={styles.km}>{km.toFixed(1)} km</Text> : null}
         {selected ? <View style={styles.check}><Ionicons name="checkmark" size={12} color={colors.white} /></View> : null}
       </View>
@@ -346,9 +420,9 @@ function sheetStyles(colors: Palette) {
     paddingHorizontal: 14,
     paddingVertical: 8
   },
-  chipOn: { backgroundColor: 'rgba(14,201,165,0.16)', borderColor: colors.accent },
+  chipOn: { backgroundColor: 'rgba(240,107,85,0.16)', borderColor: colors.accent },
   chipText: { ...typography.body, color: colors.ink },
-  chipTextOn: { color: colors.limeDark, fontWeight: '600' },
+  chipTextOn: { color: colors.accentDark, fontWeight: '600' },
   search: {
     marginHorizontal: spacing.md,
     backgroundColor: colors.surface,
@@ -367,10 +441,10 @@ function sheetStyles(colors: Palette) {
     borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(14,201,165,0.12)'
+    backgroundColor: 'rgba(240,107,85,0.12)'
   },
   rowCopy: { flex: 1 },
-  currentTitle: { ...typography.heading, color: colors.limeDark },
+  currentTitle: { ...typography.heading, color: colors.accentDark },
   rowTitle: { ...typography.heading, color: colors.ink },
   rowBody: { ...typography.caption, color: colors.muted, marginTop: 2 },
   section: { ...typography.body, color: colors.muted, marginTop: spacing.lg, marginBottom: spacing.sm },
@@ -387,7 +461,7 @@ function sheetStyles(colors: Palette) {
     width: 72,
     height: 72,
     borderRadius: 16,
-    backgroundColor: 'rgba(14,201,165,0.16)',
+    backgroundColor: 'rgba(240,107,85,0.16)',
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -397,13 +471,13 @@ function sheetStyles(colors: Palette) {
     fontSize: 9,
     fontWeight: '700',
     color: colors.white,
-    backgroundColor: colors.limeDark,
+    backgroundColor: colors.accentDark,
     overflow: 'hidden',
     borderRadius: 6,
     paddingHorizontal: 4,
     paddingVertical: 1
   },
-  km: { position: 'absolute', bottom: 6, fontSize: 10, fontWeight: '700', color: colors.limeDark },
+  km: { position: 'absolute', bottom: 6, fontSize: 10, fontWeight: '700', color: colors.accentDark },
   check: {
     position: 'absolute',
     top: -4,
@@ -411,7 +485,7 @@ function sheetStyles(colors: Palette) {
     width: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: colors.limeDark,
+    backgroundColor: colors.accentDark,
     alignItems: 'center',
     justifyContent: 'center'
   },
@@ -420,8 +494,8 @@ function sheetStyles(colors: Palette) {
   cardTitle: { ...typography.heading, color: colors.ink },
   used: {
     ...typography.caption,
-    color: colors.limeDark,
-    backgroundColor: 'rgba(14,201,165,0.16)',
+    color: colors.accentDark,
+    backgroundColor: 'rgba(240,107,85,0.16)',
     overflow: 'hidden',
     borderRadius: radii.pill,
     paddingHorizontal: 8,
