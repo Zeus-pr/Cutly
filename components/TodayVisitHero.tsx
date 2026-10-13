@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import LottieView from 'lottie-react-native';
 import { fontFamily } from '@/constants/fonts';
@@ -13,7 +14,7 @@ import {
 } from '@/utils/todayVisit';
 import type { TodayVisitPhase } from '@/utils/todayVisit';
 
-const VISIT_LOTTIE: Record<TodayVisitPhase, number> = {
+const VISIT_LOTTIE: Record<TodayVisitPhase, ComponentProps<typeof LottieView>['source']> = {
   upcoming: require('@/assets/animations/visit-upcoming.json'),
   started: require('@/assets/animations/visit-started.json'),
   completed: require('@/assets/animations/visit-finished.json')

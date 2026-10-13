@@ -23,6 +23,7 @@ export function NotFoundScreen({ onRetry }: Props) {
           autoPlay
           loop
           style={styles.lottie}
+          // @ts-expect-error lottie-react-native typings omit accessibility props; the native view still receives them
           accessibilityLabel="Page not found animation"
         />
         <Text style={styles.title}>{COPY}</Text>

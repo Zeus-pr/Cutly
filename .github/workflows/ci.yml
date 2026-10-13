@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
@@ -34,7 +34,7 @@ jobs:
       - name: Unit tests (vitest)
         run: npm test
       - name: Typecheck (Expo app + backend)
-        # Root tsconfig includes **/*.ts, so admin/ and site/ are typechecked in their own jobs.
+        # Root tsconfig excludes admin/ and site/; they are typechecked in their own jobs.
         run: npx tsc --noEmit
 
   migrations:
@@ -58,12 +58,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - name: Enable btree_gist
-        run: psql "$DATABASE_URL" -c 'CREATE EXTENSION IF NOT EXISTS btree_gist;'
+      # btree_gist is created by migration 20261003154500_booking_no_overlap itself.
       - name: Prisma migrate deploy
         run: npx prisma migrate deploy
 
@@ -77,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -90,7 +89,6 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit -p .
       - name: Build (Vite)
-        if: always()
         run: npm run build
 
   site:
@@ -103,7 +101,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: site/package-lock.json
       - run: npm ci

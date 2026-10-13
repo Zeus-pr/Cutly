@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { Prisma, PrismaClient, ShopKind } from '@prisma/client';
+import { BookingStatus, Prisma, PrismaClient, ShopKind } from '@prisma/client';
 import { jwtSecret, signToken } from './auth';
 import {
   assertTransition,
@@ -1119,7 +1119,7 @@ export async function updatePartnerBookingStatus(token: string, bookingId: strin
   // No-show does not refund. Payment stays as recorded.
   const updated = await prisma.booking.update({
     where: { id: booking.id },
-    data: { status },
+    data: { status: status as BookingStatus },
     include: {
       user: true,
       barber: true,

@@ -375,7 +375,7 @@ export function PartnerMenuCatalogue({ shop, busy, setBusy, onFlash, onSaved }: 
               );
             })}
           </div>
-          <div style={{ marginTop: 14, displayTop: '1px solid var(--line)', paddingTop: 12 }}>
+          <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
             <p className="hint" style={{ marginBottom: 8 }}>
               Add global category
             </p>
