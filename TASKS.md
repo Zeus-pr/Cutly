@@ -37,7 +37,7 @@ Trackable IDs from holistic review. Canvas: open beside chat. Say **“do SEC-xx
 |----|-----|--------|-------|
 | **SEC-01** | Critical | [x] | Admin loopback-only + strong secret (rotated; rejects weak default) |
 | **SEC-02** | High | [x] | `clientKey` / lead IP use `req.ip` only (no spoofable XFF) |
-| **SEC-03** | High | [ ] | Google link without `email_verified` *(Wave 2 skipped — still open in audit)* |
+| **SEC-03** | High | [x] | Google link only when `email_verified === true`; otherwise email is ignored |
 | **SEC-04** | High | [x] | Public `/partner/signup` → 403; partner login rate-limited |
 | **SEC-05** | High | [x] | Admin: rate limit + `timingSafeEqual` + 401 |
 | **SEC-06** | High | [x] | `handle()` → `toClientError`; client +not-found / ErrorBoundary Lottie cat |
@@ -54,7 +54,7 @@ Trackable IDs from holistic review. Canvas: open beside chat. Say **“do SEC-xx
 | **SEC-16**–**19**, **21** | Low/Info | [ ] | OTP/PIN/HMAC/JWT TTL/MockPayment |
 | **SEC-22**–**26** | OK | [x] | SQLi OK · IDOR scoped · bcrypt · SecureStore · `.env` ignored |
 
-**Wave 1:** [x] SEC-01 / 02 / 04 / 05. **Wave 2:** [x] SEC-06 / 08–10 (SEC-03 deferred). Next **Wave 3** hygiene.
+**Wave 1:** [x] SEC-01 / 02 / 04 / 05. **Wave 2:** [x] SEC-03 / 06 / 08–10. Next **Wave 3** hygiene.
 
 ---
 

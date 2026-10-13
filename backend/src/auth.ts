@@ -171,6 +171,16 @@ export async function signIn(email: string, password: string) {
   return { token: signToken(profile), user: profile };
 }
 
+/**
+ * SEC-03: an unverified Google email must not match or be saved on a CUTLY user.
+ * `email_verified` is only trusted when it is boolean true.
+ */
+export function trustedGoogleEmail(payload: { email?: string | null; email_verified?: boolean | null }) {
+  if (payload.email_verified !== true) return null;
+  const email = payload.email?.trim().toLowerCase() || '';
+  return email || null;
+}
+
 export async function signInWithGoogle(idToken: string) {
   const clientId = process.env.GOOGLE_WEB_CLIENT_ID;
   if (!clientId) throw new Error('Google sign-in is not configured.');
@@ -179,10 +189,14 @@ export async function signInWithGoogle(idToken: string) {
   const payload = ticket.getPayload();
   const googleSub = payload?.sub;
   if (!googleSub) throw new Error('Google did not return an account.');
-  const email = payload.email?.toLowerCase() || null;
+  const email = trustedGoogleEmail(payload);
   const name = payload.name || null;
-  const existing = await prisma.user.findUnique({ where: { googleSub } })
-    || (email ? await prisma.user.findUnique({ where: { email } }) : null);
+  const bySub = await prisma.user.findUnique({ where: { googleSub } });
+  const byEmail = email ? await prisma.user.findUnique({ where: { email } }) : null;
+  if (bySub && byEmail && bySub.id !== byEmail.id) {
+    throw new Error('This Google account does not match that email on CUTLY.');
+  }
+  const existing = bySub || byEmail;
   const user = existing
     ? await prisma.user.update({ where: { id: existing.id }, data: { googleSub, email: existing.email || email, name: existing.name || name } })
     : await prisma.user.create({ data: { googleSub, email, name } });
