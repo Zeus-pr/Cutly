@@ -109,6 +109,7 @@ export async function updateProfile(
     name?: string;
     phone?: string;
     email?: string | null;
+    emailVerified?: boolean;
     gender?: string | null;
     dateOfBirth?: Date;
     inviteCode?: string | null;
@@ -137,6 +138,7 @@ export async function updateProfile(
       if (taken) throw new Error('That email is already on another account.');
       data.email = email;
     }
+    if ((data.email ?? null) !== (current.email ?? null)) data.emailVerified = false;
   }
   if (input.gender !== undefined) {
     const gender = input.gender.trim().toLowerCase();
@@ -181,6 +183,54 @@ export function trustedGoogleEmail(payload: { email?: string | null; email_verif
   return email || null;
 }
 
+export type GoogleProfileHit = {
+  id: string;
+  email: string | null;
+  googleSub: string | null;
+  emailVerified: boolean;
+};
+
+export type GoogleLinkPlan =
+  | { kind: 'link'; userId: string; storeEmail: string | null; markEmailVerified: boolean }
+  | { kind: 'create'; email: string | null }
+  | { kind: 'reject' };
+
+/**
+ * SEC-03: link a verified Google email only to a CUTLY profile whose stored email
+ * was itself verified. A typed address is ignored, and a different googleSub is never replaced.
+ */
+export function planGoogleLink(input: {
+  googleSub: string;
+  trustedEmail: string | null;
+  bySub: GoogleProfileHit | null;
+  byEmail: GoogleProfileHit | null;
+}): GoogleLinkPlan {
+  const { googleSub, trustedEmail, bySub, byEmail } = input;
+
+  if (bySub) {
+    const takenByOther = Boolean(byEmail && byEmail.id !== bySub.id);
+    const matchesStored = Boolean(trustedEmail && bySub.email === trustedEmail);
+    const fillEmpty = Boolean(trustedEmail && !bySub.email && !takenByOther);
+    return {
+      kind: 'link',
+      userId: bySub.id,
+      storeEmail: fillEmpty ? trustedEmail : null,
+      markEmailVerified: matchesStored || fillEmpty
+    };
+  }
+
+  if (byEmail) {
+    const sameGoogle = !byEmail.googleSub || byEmail.googleSub === googleSub;
+    if (byEmail.emailVerified && sameGoogle) {
+      return { kind: 'link', userId: byEmail.id, storeEmail: null, markEmailVerified: true };
+    }
+    if (byEmail.googleSub && byEmail.googleSub !== googleSub) return { kind: 'reject' };
+    return { kind: 'create', email: null };
+  }
+
+  return { kind: 'create', email: trustedEmail };
+}
+
 export async function signInWithGoogle(idToken: string) {
   const clientId = process.env.GOOGLE_WEB_CLIENT_ID;
   if (!clientId) throw new Error('Google sign-in is not configured.');
@@ -193,13 +243,31 @@ export async function signInWithGoogle(idToken: string) {
   const name = payload.name || null;
   const bySub = await prisma.user.findUnique({ where: { googleSub } });
   const byEmail = email ? await prisma.user.findUnique({ where: { email } }) : null;
-  if (bySub && byEmail && bySub.id !== byEmail.id) {
-    throw new Error('This Google account does not match that email on CUTLY.');
-  }
-  const existing = bySub || byEmail;
-  const user = existing
-    ? await prisma.user.update({ where: { id: existing.id }, data: { googleSub, email: existing.email || email, name: existing.name || name } })
-    : await prisma.user.create({ data: { googleSub, email, name } });
+  const plan = planGoogleLink({
+    googleSub,
+    trustedEmail: email,
+    bySub: bySub
+      ? { id: bySub.id, email: bySub.email, googleSub: bySub.googleSub, emailVerified: bySub.emailVerified }
+      : null,
+    byEmail: byEmail
+      ? { id: byEmail.id, email: byEmail.email, googleSub: byEmail.googleSub, emailVerified: byEmail.emailVerified }
+      : null
+  });
+  if (plan.kind === 'reject') throw new Error('This Google account does not match that email on CUTLY.');
+  const existing = bySub?.id === (plan.kind === 'link' ? plan.userId : '') ? bySub : byEmail;
+  const user = plan.kind === 'create'
+    ? await prisma.user.create({
+        data: { googleSub, email: plan.email, emailVerified: Boolean(plan.email), name }
+      })
+    : await prisma.user.update({
+        where: { id: plan.userId },
+        data: {
+          googleSub,
+          name: existing?.name || name,
+          ...(plan.storeEmail ? { email: plan.storeEmail } : {}),
+          ...(plan.markEmailVerified ? { emailVerified: true } : {})
+        }
+      });
   const profile = publicUser(user);
   return { token: signToken(profile), user: profile };
 }
