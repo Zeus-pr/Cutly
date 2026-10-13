@@ -156,7 +156,7 @@ export default function PartnerFloor() {
           ? await partnerApi.setWalkInStatus(visit.id, status as 'COMPLETED' | 'CANCELLED')
           : await partnerApi.setBookingStatus(
               visit.id,
-              status as 'ARRIVED' | 'IN_SERVICE' | 'COMPLETED' | 'NO_SHOW'
+              status as 'COMPLETED' | 'NO_SHOW'
             );
       void Haptics.selectionAsync();
       setVisits((list) => {

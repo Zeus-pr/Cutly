@@ -202,7 +202,7 @@ export const partnerApi = {
   dashboard: () => call<PartnerDashboard>('/partner/dashboard'),
   requests: () => call<{ items: BookingRequest[]; requestCount: number }>('/partner/requests'),
   history: () => call<{ items: PartnerHistoryItem[] }>('/partner/history'),
-  setBookingStatus: (id: string, status: 'ARRIVED' | 'IN_SERVICE' | 'COMPLETED' | 'NO_SHOW') =>
+  setBookingStatus: (id: string, status: 'COMPLETED' | 'NO_SHOW') =>
     call<FloorVisit>(`/partner/bookings/${id}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status })

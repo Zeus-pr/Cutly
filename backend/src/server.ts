@@ -59,7 +59,7 @@ import {
   updateShopPhone,
   updateShopProfile
 } from './partner';
-import type { BookingState } from './bookingState';
+import { PARTNER_FLOOR_TARGETS } from './bookingState';
 import { startAwaitingExpirySweep } from './awaitingExpiry';
 import { WALK_IN_DURATIONS } from './walkins';
 import {
@@ -389,12 +389,12 @@ app.patch('/api/partner/bookings/:id/status', (req, res) => {
   const token = bearer(req);
   const parsed = z
     .object({
-      status: z.enum(['ARRIVED', 'IN_SERVICE', 'COMPLETED', 'NO_SHOW'])
+      status: z.enum(PARTNER_FLOOR_TARGETS)
     })
     .safeParse(req.body);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
   if (!parsed.success) return res.status(400).json({ error: 'Pick a valid floor status.' });
-  return handle(res, () => updatePartnerBookingStatus(token, req.params.id, parsed.data.status as BookingState));
+  return handle(res, () => updatePartnerBookingStatus(token, req.params.id, parsed.data.status));
 });
 app.post('/api/partner/bookings/:id/start', (req, res) => {
   const token = bearer(req);
