@@ -4,7 +4,8 @@ import {
   assertPartnerTransition,
   canPartnerTransition,
   canTransition,
-  setBookingStatusIfCurrent
+  setBookingStatusIfCurrent,
+  transitionWithSideEffect
 } from '../backend/src/bookingState';
 import { AppError, toClientError } from '../backend/src/httpError';
 
@@ -100,5 +101,60 @@ describe('setBookingStatusIfCurrent (race guard)', () => {
     const db = fakeDb('EXPIRED');
     await expect(setBookingStatusIfCurrent(db, 'b1', 'CONFIRMED', 'NO_SHOW')).rejects.toMatchObject({ status: 409 });
     expect(db.status).toBe('EXPIRED');
+  });
+});
+
+describe('transitionWithSideEffect (T6 atomic settle)', () => {
+  type Row = { status: BookingStatus; settled: boolean };
+  function txDb(initial: Row) {
+    const state = { ...initial };
+    const makeTx = (draft: Row) => ({
+      booking: {
+        async updateMany(args: { where: { id: string; status: BookingStatus }; data: { status: BookingStatus } }) {
+          if (args.where.status !== draft.status) return { count: 0 };
+          draft.status = args.data.status;
+          return { count: 1 };
+        }
+      },
+      settle() {
+        draft.settled = true;
+      }
+    });
+    return {
+      state,
+      async $transaction<R>(fn: (tx: ReturnType<typeof makeTx>) => Promise<R>): Promise<R> {
+        const draft = { ...state };
+        const out = await fn(makeTx(draft)); // throws -> draft discarded (rollback)
+        Object.assign(state, draft);
+        return out;
+      }
+    };
+  }
+
+  it('commits status and settlement together', async () => {
+    const db = txDb({ status: 'IN_SERVICE', settled: false });
+    await transitionWithSideEffect(db, 'b1', 'IN_SERVICE', 'COMPLETED', async (tx) => tx.settle());
+    expect(db.state).toEqual({ status: 'COMPLETED', settled: true });
+  });
+
+  it('rolls back the status change when collection fails', async () => {
+    const db = txDb({ status: 'IN_SERVICE', settled: false });
+    await expect(
+      transitionWithSideEffect(db, 'b1', 'IN_SERVICE', 'COMPLETED', async () => {
+        throw new Error('payment write failed');
+      })
+    ).rejects.toThrow('payment write failed');
+    expect(db.state).toEqual({ status: 'IN_SERVICE', settled: false });
+  });
+
+  it('does not settle when the guard loses the race', async () => {
+    const db = txDb({ status: 'EXPIRED', settled: false });
+    let ran = false;
+    await expect(
+      transitionWithSideEffect(db, 'b1', 'IN_SERVICE', 'COMPLETED', async () => {
+        ran = true;
+      })
+    ).rejects.toMatchObject({ status: 409 });
+    expect(ran).toBe(false);
   });
 });

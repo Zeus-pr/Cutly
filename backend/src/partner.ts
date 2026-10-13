@@ -6,6 +6,7 @@ import {
   assertTransition,
   assertPartnerTransition,
   setBookingStatusIfCurrent,
+  transitionWithSideEffect,
   type PartnerFloorTarget,
   nextFloorActions,
   nextShopRequestActions,
@@ -1103,21 +1104,19 @@ export async function updatePartnerBookingStatus(token: string, bookingId: strin
     }
   });
   if (!booking) throw new Error('Booking not found.');
+  // Transition first: wrong state is 409 even before the no-show grace window opens.
+  assertPartnerTransition(booking.status, status);
   if (status === 'NO_SHOW' && !canMarkNoShow(booking.startsAt)) {
     throw new Error('No-show unlocks 5 minutes after the appointment start.');
   }
-  assertPartnerTransition(booking.status, status);
 
-  // Compare-and-set first so a raced request never settles money twice (T6).
-  await setBookingStatusIfCurrent(prisma, booking.id, booking.status, status);
-
-  // Done = complete service + collect any remaining at shop (revenue) in one step.
-  if (status === 'COMPLETED') {
-    const money = bookingMoney(booking);
-    if (money.remainingPaise > 0) {
-      await settleRemainingAtShop(booking);
+  // T6: compare-and-set + balance settlement commit or roll back together.
+  await transitionWithSideEffect(prisma, booking.id, booking.status, status, async (tx) => {
+    // Done = complete service + collect any remaining at shop (revenue) in one step.
+    if (status === 'COMPLETED' && bookingMoney(booking).remainingPaise > 0) {
+      await settleRemainingAtShop(booking, tx as Prisma.TransactionClient);
     }
-  }
+  });
 
   // No-show does not refund. Payment stays as recorded.
   const updated = await prisma.booking.findUniqueOrThrow({
@@ -1148,10 +1147,10 @@ type BookingForSettle = {
 };
 
 /** Capture remaining balance as shop-settled (PS-31). */
-async function settleRemainingAtShop(booking: BookingForSettle) {
+async function settleRemainingAtShop(booking: BookingForSettle, db: Prisma.TransactionClient = prisma) {
   const now = new Date();
   if (booking.payment) {
-    await prisma.bookingPayment.update({
+    await db.bookingPayment.update({
       where: { bookingId: booking.id },
       data: {
         amountPaise: booking.totalPaise,
@@ -1164,7 +1163,7 @@ async function settleRemainingAtShop(booking: BookingForSettle) {
       }
     });
   } else {
-    await prisma.bookingPayment.create({
+    await db.bookingPayment.create({
       data: {
         bookingId: booking.id,
         provider: 'shop',
@@ -1242,20 +1241,24 @@ export async function startBookingWithVerifyPin(token: string, bookingId: string
     throw new Error('Wrong code. Ask the customer for the 4-digit visit code.');
   }
 
-  if (booking.status === 'CONFIRMED') {
-    assertTransition('CONFIRMED', 'ARRIVED');
-    await prisma.booking.update({ where: { id: booking.id }, data: { status: 'ARRIVED' } });
-  }
-  assertTransition('ARRIVED', 'IN_SERVICE');
-  const updated = await prisma.booking.update({
-    where: { id: booking.id },
-    data: { status: 'IN_SERVICE' },
-    include: {
-      user: true,
-      barber: true,
-      services: { include: { service: true } },
-      payment: true
+  // T6: status-checked writes in one transaction — a PIN start that read CONFIRMED
+  // can't overwrite a NO_SHOW committed meanwhile (409 instead).
+  const updated = await prisma.$transaction(async (tx) => {
+    if (booking.status === 'CONFIRMED') {
+      assertTransition('CONFIRMED', 'ARRIVED');
+      await setBookingStatusIfCurrent(tx, booking.id, 'CONFIRMED', 'ARRIVED');
     }
+    assertTransition('ARRIVED', 'IN_SERVICE');
+    await setBookingStatusIfCurrent(tx, booking.id, 'ARRIVED', 'IN_SERVICE');
+    return tx.booking.findUniqueOrThrow({
+      where: { id: booking.id },
+      include: {
+        user: true,
+        barber: true,
+        services: { include: { service: true } },
+        payment: true
+      }
+    });
   });
   void notifyUser(updated.userId, {
     title: 'Service started',

@@ -111,3 +111,24 @@ export async function setBookingStatusIfCurrent(
   const { count } = await db.booking.updateMany({ where: { id: bookingId, status: from }, data: { status: to } });
   if (count !== 1) throw new AppError('This booking changed in the meantime. Refresh and try again.', 409);
 }
+
+type TransactionalDb<Tx extends ConditionalUpdater> = {
+  $transaction<R>(fn: (tx: Tx) => Promise<R>): Promise<R>;
+};
+
+/**
+ * T6: guarded status change + side effect (e.g. settle balance at shop) in ONE interactive
+ * transaction. If the side effect throws, the status change rolls back too.
+ */
+export async function transitionWithSideEffect<Tx extends ConditionalUpdater>(
+  db: TransactionalDb<Tx>,
+  bookingId: string,
+  from: BookingState,
+  to: BookingState,
+  effect: (tx: Tx) => Promise<void>
+) {
+  await db.$transaction(async (tx) => {
+    await setBookingStatusIfCurrent(tx, bookingId, from, to);
+    await effect(tx);
+  });
+}
