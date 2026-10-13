@@ -4,6 +4,9 @@ import { BookingStatus, Prisma, PrismaClient, ShopKind } from '@prisma/client';
 import { jwtSecret, signToken } from './auth';
 import {
   assertTransition,
+  assertPartnerTransition,
+  setBookingStatusIfCurrent,
+  type PartnerFloorTarget,
   nextFloorActions,
   nextShopRequestActions,
   type BookingState
@@ -1085,7 +1088,7 @@ function mapHistoryRow(row: {
   };
 }
 
-export async function updatePartnerBookingStatus(token: string, bookingId: string, status: BookingState) {
+export async function updatePartnerBookingStatus(token: string, bookingId: string, status: PartnerFloorTarget) {
   const partner = await partnerFromToken(token);
   const shop = await prisma.shop.findUnique({ where: { ownerPartnerId: partner.id } });
   if (!shop?.setupDone) throw new Error('Finish shop setup first.');
@@ -1100,13 +1103,13 @@ export async function updatePartnerBookingStatus(token: string, bookingId: strin
     }
   });
   if (!booking) throw new Error('Booking not found.');
-  if (status === 'IN_SERVICE') {
-    throw new Error('Enter the customer’s 4-digit code to start service.');
-  }
   if (status === 'NO_SHOW' && !canMarkNoShow(booking.startsAt)) {
     throw new Error('No-show unlocks 5 minutes after the appointment start.');
   }
-  assertTransition(booking.status as BookingState, status);
+  assertPartnerTransition(booking.status, status);
+
+  // Compare-and-set first so a raced request never settles money twice (T6).
+  await setBookingStatusIfCurrent(prisma, booking.id, booking.status, status);
 
   // Done = complete service + collect any remaining at shop (revenue) in one step.
   if (status === 'COMPLETED') {
@@ -1117,9 +1120,8 @@ export async function updatePartnerBookingStatus(token: string, bookingId: strin
   }
 
   // No-show does not refund. Payment stays as recorded.
-  const updated = await prisma.booking.update({
+  const updated = await prisma.booking.findUniqueOrThrow({
     where: { id: booking.id },
-    data: { status: status as BookingStatus },
     include: {
       user: true,
       barber: true,

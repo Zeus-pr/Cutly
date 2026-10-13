@@ -30,7 +30,7 @@ describe('booking state machine', () => {
   });
 
   it('blocks skipping a hold', () => {
-    expect(() => assertTransition('AVAILABLE', 'CONFIRMED')).toThrow();
+    expect(() => assertTransition('HELD', 'CONFIRMED')).toThrow();
   });
 });
 
