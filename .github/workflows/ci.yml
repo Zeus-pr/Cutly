@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+
+jobs:
+  app-api:
+    name: App + API (typecheck, Prisma, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - name: Prisma validate
+        run: npx prisma validate
+      - name: Prisma generate
+        run: npx prisma generate
+      - name: Unit tests (vitest)
+        run: npm test
+      - name: Typecheck (Expo app + backend)
+        # Root tsconfig excludes admin/ and site/; they are typechecked in their own jobs.
+        run: npx tsc --noEmit
+
+  migrations:
+    name: Prisma migrations apply cleanly
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      # btree_gist is created by migration 20261003154500_booking_no_overlap itself.
+      - name: Prisma migrate deploy
+        run: npx prisma migrate deploy
+
+  admin:
+    name: Admin portal (typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            admin/package-lock.json
+      # admin imports ../constants/catalogue.ts, which resolves the root tsconfig (extends expo/tsconfig.base)
+      - name: Install root deps
+        run: npm ci
+        working-directory: .
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit -p .
+      - name: Build (Vite)
+        run: npm run build
+
+  site:
+    name: Marketing site (typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit -p .
+      - name: Build (Vite)
+        run: npm run build

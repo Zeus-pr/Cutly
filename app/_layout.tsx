@@ -86,7 +86,7 @@ function SessionGate({ bootDone }: { bootDone: boolean }) {
   useEffect(() => {
     if (!hydrated || !bootDone) return;
     const root = segments[0];
-    const child = segments[1];
+    const child = (segments as string[])[1];
 
     if (partnerToken) {
       if (!setupDone) {
@@ -199,7 +199,7 @@ export default function Layout() {
   const onHomeRoute = (() => {
     if (!hydrated || !signedIn) return false;
     const root = segments[0];
-    const child = segments[1];
+    const child = (segments as string[])[1];
     if (partnerToken) {
       if (!setupDone) return root === 'partner' && child === 'setup';
       return root === 'partner' && child !== 'auth' && child !== 'setup';

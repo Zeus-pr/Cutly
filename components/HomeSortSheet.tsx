@@ -169,7 +169,7 @@ function sheetStyles(colors: Palette) {
     root: { flex: 1, justifyContent: 'flex-end' },
     fill: { flex: 1 },
     backdrop: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       backgroundColor: 'rgba(0,0,0,0.45)'
     },
     sheet: {

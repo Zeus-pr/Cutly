@@ -1291,13 +1291,13 @@ function mapBookingPayload(booking: {
     typeof booking.shop.latitude === 'number'
       ? booking.shop.latitude
       : booking.shop.latitude && 'toNumber' in booking.shop.latitude
-        ? booking.shop.latitude.toNumber()
+        ? (booking.shop.latitude as { toNumber(): number }).toNumber()
         : null;
   const lng =
     typeof booking.shop.longitude === 'number'
       ? booking.shop.longitude
       : booking.shop.longitude && 'toNumber' in booking.shop.longitude
-        ? booking.shop.longitude.toNumber()
+        ? (booking.shop.longitude as { toNumber(): number }).toNumber()
         : null;
   return {
     id: booking.id,

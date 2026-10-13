@@ -176,7 +176,7 @@ export function ChoiceSheet({
 const sheetStyles = (colors: Palette) =>
   StyleSheet.create({
     root: { flex: 1, justifyContent: 'flex-end' },
-    backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(23,38,60,0.45)' },
+    backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(23,38,60,0.45)' },
     sheet: {
       backgroundColor: colors.surface,
       borderTopLeftRadius: radii.lg,

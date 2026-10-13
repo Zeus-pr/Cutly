@@ -138,7 +138,7 @@ function sheetStyles(colors: Palette) {
   return StyleSheet.create({
     root: { flex: 1, justifyContent: 'flex-end' },
     backdrop: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       backgroundColor: 'rgba(20,17,16,0.45)'
     },
     sheet: {
