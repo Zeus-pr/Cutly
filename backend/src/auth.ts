@@ -81,6 +81,8 @@ export function sameEmail(stored: string, typed: string) {
 
 async function findUsersByEmail(email: string) {
   const normalised = normalEmail(email);
+  const exact = await prisma.user.findUnique({ where: { email: normalised } });
+  if (exact) return [exact];
   const ids = await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "User"
     WHERE email IS NOT NULL AND lower(btrim(email)) = ${normalised}
@@ -92,8 +94,8 @@ async function findUsersByEmail(email: string) {
 
 export async function signUp(email: string, password: string, phone: string, name?: string) {
   const normalised = normalEmail(email);
-  const existing = await prisma.user.findUnique({ where: { email: normalised } });
-  if (existing) throw new Error(SIGNUP_TAKEN);
+  const existing = await findUsersByEmail(normalised);
+  if (existing.length) throw new Error(SIGNUP_TAKEN);
   const phoneTaken = await prisma.user.findUnique({ where: { phone } });
   if (phoneTaken) throw new Error(SIGNUP_TAKEN);
   const user = await prisma.user.create({
@@ -158,7 +160,7 @@ export async function updateProfile(
       data.email = null;
     } else {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email.');
-      const taken = await prisma.user.findFirst({ where: { email, NOT: { id: current.id } } });
+      const taken = (await findUsersByEmail(email)).some((row) => row.id !== current.id);
       if (taken) throw new Error('That email is already on another account.');
       data.email = email;
     }
