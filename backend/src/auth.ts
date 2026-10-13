@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import twilio from 'twilio';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { assertDateOfBirth } from '../../utils/dateOfBirth';
 
 const prisma = new PrismaClient();
@@ -191,13 +191,20 @@ export type GoogleProfileHit = {
 };
 
 export type GoogleLinkPlan =
-  | { kind: 'link'; userId: string; storeEmail: string | null; markEmailVerified: boolean }
-  | { kind: 'create'; email: string | null }
+  | {
+      kind: 'link';
+      userId: string;
+      storeEmail: string | null;
+      markEmailVerified: boolean;
+      reclaimFromUserId: string | null;
+    }
+  | { kind: 'create'; email: string | null; reclaimFromUserId: string | null }
   | { kind: 'reject' };
 
 /**
  * SEC-03: link a verified Google email only to a CUTLY profile whose stored email
- * was itself verified. A typed address is ignored, and a different googleSub is never replaced.
+ * was itself verified. A typed address is moved off that row, and a different googleSub
+ * on a verified profile is never replaced.
  */
 export function planGoogleLink(input: {
   googleSub: string;
@@ -206,29 +213,36 @@ export function planGoogleLink(input: {
   byEmail: GoogleProfileHit | null;
 }): GoogleLinkPlan {
   const { googleSub, trustedEmail, bySub, byEmail } = input;
+  const unverifiedOther = byEmail && !byEmail.emailVerified && (!bySub || byEmail.id !== bySub.id) ? byEmail : null;
 
   if (bySub) {
-    const takenByOther = Boolean(byEmail && byEmail.id !== bySub.id);
     const matchesStored = Boolean(trustedEmail && bySub.email === trustedEmail);
-    const fillEmpty = Boolean(trustedEmail && !bySub.email && !takenByOther);
+    const fillEmpty = Boolean(trustedEmail && !bySub.email && !unverifiedOther && (!byEmail || byEmail.id === bySub.id));
+    const reclaim = Boolean(trustedEmail && !bySub.email && unverifiedOther);
     return {
       kind: 'link',
       userId: bySub.id,
-      storeEmail: fillEmpty ? trustedEmail : null,
-      markEmailVerified: matchesStored || fillEmpty
+      storeEmail: fillEmpty || reclaim ? trustedEmail : null,
+      markEmailVerified: matchesStored || fillEmpty || reclaim,
+      reclaimFromUserId: reclaim && unverifiedOther ? unverifiedOther.id : null
     };
   }
 
-  if (byEmail) {
+  if (byEmail?.emailVerified) {
     const sameGoogle = !byEmail.googleSub || byEmail.googleSub === googleSub;
-    if (byEmail.emailVerified && sameGoogle) {
-      return { kind: 'link', userId: byEmail.id, storeEmail: null, markEmailVerified: true };
-    }
-    if (byEmail.googleSub && byEmail.googleSub !== googleSub) return { kind: 'reject' };
-    return { kind: 'create', email: null };
+    if (!sameGoogle) return { kind: 'reject' };
+    return { kind: 'link', userId: byEmail.id, storeEmail: null, markEmailVerified: true, reclaimFromUserId: null };
   }
 
-  return { kind: 'create', email: trustedEmail };
+  if (unverifiedOther && trustedEmail) {
+    return { kind: 'create', email: trustedEmail, reclaimFromUserId: unverifiedOther.id };
+  }
+
+  return { kind: 'create', email: trustedEmail, reclaimFromUserId: null };
+}
+
+export function isPrismaUniqueConflict(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 export async function signInWithGoogle(idToken: string) {
@@ -241,6 +255,15 @@ export async function signInWithGoogle(idToken: string) {
   if (!googleSub) throw new Error('Google did not return an account.');
   const email = trustedGoogleEmail(payload);
   const name = payload.name || null;
+  try {
+    return await finishGoogleSignIn(googleSub, email, name);
+  } catch (error) {
+    if (!isPrismaUniqueConflict(error)) throw error;
+    return finishGoogleSignIn(googleSub, email, name);
+  }
+}
+
+async function finishGoogleSignIn(googleSub: string, email: string | null, name: string | null) {
   const bySub = await prisma.user.findUnique({ where: { googleSub } });
   const byEmail = email ? await prisma.user.findUnique({ where: { email } }) : null;
   const plan = planGoogleLink({
@@ -255,19 +278,28 @@ export async function signInWithGoogle(idToken: string) {
   });
   if (plan.kind === 'reject') throw new Error('This Google account does not match that email on CUTLY.');
   const existing = bySub?.id === (plan.kind === 'link' ? plan.userId : '') ? bySub : byEmail;
-  const user = plan.kind === 'create'
-    ? await prisma.user.create({
-        data: { googleSub, email: plan.email, emailVerified: Boolean(plan.email), name }
-      })
-    : await prisma.user.update({
-        where: { id: plan.userId },
-        data: {
-          googleSub,
-          name: existing?.name || name,
-          ...(plan.storeEmail ? { email: plan.storeEmail } : {}),
-          ...(plan.markEmailVerified ? { emailVerified: true } : {})
-        }
+  const user = await prisma.$transaction(async (tx) => {
+    if (plan.reclaimFromUserId) {
+      await tx.user.update({
+        where: { id: plan.reclaimFromUserId },
+        data: { email: null, emailVerified: false }
       });
+    }
+    if (plan.kind === 'create') {
+      return tx.user.create({
+        data: { googleSub, email: plan.email, emailVerified: Boolean(plan.email), name }
+      });
+    }
+    return tx.user.update({
+      where: { id: plan.userId },
+      data: {
+        googleSub,
+        name: existing?.name || name,
+        ...(plan.storeEmail ? { email: plan.storeEmail } : {}),
+        ...(plan.markEmailVerified ? { emailVerified: true } : {})
+      }
+    });
+  });
   const profile = publicUser(user);
   return { token: signToken(profile), user: profile };
 }

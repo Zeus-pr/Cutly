@@ -31,11 +31,12 @@ describe('planGoogleLink (SEC-03)', () => {
   it('creates a profile with the verified email when nobody has it', () => {
     expect(planGoogleLink({ googleSub, trustedEmail, bySub: null, byEmail: null })).toEqual({
       kind: 'create',
-      email: trustedEmail
+      email: trustedEmail,
+      reclaimFromUserId: null
     });
   });
 
-  it('does not attach Google to an account that only typed the email', () => {
+  it('moves a typed email onto the new Google profile', () => {
     expect(
       planGoogleLink({
         googleSub,
@@ -43,7 +44,7 @@ describe('planGoogleLink (SEC-03)', () => {
         bySub: null,
         byEmail: hit({ id: 'typed', emailVerified: false })
       })
-    ).toEqual({ kind: 'create', email: null });
+    ).toEqual({ kind: 'create', email: trustedEmail, reclaimFromUserId: 'typed' });
   });
 
   it('links when the stored email was already verified and has no other Google account', () => {
@@ -54,7 +55,7 @@ describe('planGoogleLink (SEC-03)', () => {
         bySub: null,
         byEmail: hit({ id: 'verified', emailVerified: true })
       })
-    ).toEqual({ kind: 'link', userId: 'verified', storeEmail: null, markEmailVerified: true });
+    ).toEqual({ kind: 'link', userId: 'verified', storeEmail: null, markEmailVerified: true, reclaimFromUserId: null });
   });
 
   it('rejects replacing a different googleSub', () => {
@@ -76,7 +77,13 @@ describe('planGoogleLink (SEC-03)', () => {
         bySub: hit({ id: 'mine', email: null, googleSub, emailVerified: false }),
         byEmail: hit({ id: 'squat', emailVerified: false })
       })
-    ).toEqual({ kind: 'link', userId: 'mine', storeEmail: null, markEmailVerified: false });
+    ).toEqual({
+      kind: 'link',
+      userId: 'mine',
+      storeEmail: trustedEmail,
+      markEmailVerified: true,
+      reclaimFromUserId: 'squat'
+    });
   });
 
   it('marks the email verified when this Google profile already has that address', () => {
@@ -85,7 +92,8 @@ describe('planGoogleLink (SEC-03)', () => {
       kind: 'link',
       userId: 'mine',
       storeEmail: null,
-      markEmailVerified: true
+      markEmailVerified: true,
+      reclaimFromUserId: null
     });
   });
 });
