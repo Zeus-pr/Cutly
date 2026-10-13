@@ -116,6 +116,23 @@ export const auth = {
     save(await post('/auth/signup', { email, password, phone })),
   signIn: async (email: string, password: string) => save(await post('/auth/login', { email, password })),
   google: async (idToken: string) => save(await post('/auth/google', { idToken })),
+  linkGoogle: async (idToken: string) => {
+    const token = useSessionStore.getState().accessToken;
+    if (!token) throw new Error('Sign in again.');
+    let response: Response;
+    try {
+      response = await fetch(`${apiBase()}/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ idToken })
+      });
+    } catch {
+      throw new Error('Cannot reach the CUTLY server. Start it with npm run backend:dev.');
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || 'Request failed');
+    return save(payload.data);
+  },
   sendOtp: (phone: string) => post<{ sent: boolean }>('/auth/otp/send', { phone }),
   verifyOtp: async (phone: string, code: string) => save(await post('/auth/otp/verify', { phone, code }))
 };

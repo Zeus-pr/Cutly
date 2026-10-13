@@ -20,7 +20,7 @@ import { PrimaryButton } from '@/components/PrimaryButton';
 import { ScreenBack } from '@/components/ScreenBack';
 import { fontFamily } from '@/constants/fonts';
 import { radii, spacing, type Palette } from '@/constants/theme';
-import { deleteAccount, updateProfile } from '@/services/auth';
+import { auth, deleteAccount, updateProfile } from '@/services/auth';
 import { appAlert, appConfirm } from '@/store/useDialogStore';
 import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
 import { useSessionStore } from '@/store/useSessionStore';
@@ -95,6 +95,22 @@ export default function Profile() {
     }
   }
 
+  async function linkGoogleAccount() {
+    try {
+      const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+      const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
+      GoogleSignin.configure({ webClientId });
+      await GoogleSignin.hasPlayServices();
+      const result = await GoogleSignin.signIn();
+      const idToken = result.data?.idToken;
+      if (!idToken) throw new Error('Google did not return a sign-in token.');
+      await auth.linkGoogle(idToken);
+      appAlert('Google linked', 'This account can now use Continue with Google.');
+    } catch (err) {
+      appAlert('Could not link Google', err instanceof Error ? err.message : 'Try again.');
+    }
+  }
+
   function confirmDelete() {
     if (deleting) return;
     appConfirm({
@@ -149,6 +165,11 @@ export default function Profile() {
       label: 'Contact Us',
       icon: 'logo-whatsapp',
       onPress: () => void Linking.openURL('https://wa.me/919000000000')
+    },
+    {
+      label: 'Link Google',
+      icon: 'logo-google',
+      onPress: () => void linkGoogleAccount()
     },
     { label: "FAQ's", icon: 'information-circle-outline', onPress: () => router.push('/legal/faq') },
     { label: 'Terms & Conditions', icon: 'document-text-outline', onPress: () => router.push('/legal/terms') },

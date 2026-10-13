@@ -4,6 +4,8 @@ import {
   GoogleLinkRetry,
   normalEmail,
   planGoogleLink,
+  planGoogleMerge,
+  preferEmailOwner,
   shouldClearEmailVerified,
   shouldRetryGoogleLink,
   trustedGoogleEmail,
@@ -31,6 +33,37 @@ describe('trustedGoogleEmail (SEC-03)', () => {
   it('drops a verified claim with no address', () => {
     expect(trustedGoogleEmail({ email: '  ', email_verified: true })).toBeNull();
     expect(trustedGoogleEmail({ email: null, email_verified: true })).toBeNull();
+  });
+});
+
+describe('planGoogleMerge', () => {
+  const base = {
+    googleSub: 'google-new',
+    trustedEmail: 'guest@cutly.buzz',
+    accountId: 'me',
+    accountEmail: 'Guest@cutly.buzz',
+    accountGoogleSub: null,
+    googleOwnerId: null
+  };
+
+  it('links when the signed-in email matches Google', () => {
+    expect(planGoogleMerge(base)).toEqual({ ok: true });
+  });
+
+  it('refuses a different Google login already on the account', () => {
+    expect(planGoogleMerge({ ...base, accountGoogleSub: 'google-old' }).ok).toBe(false);
+  });
+
+  it('refuses a Google login that belongs to someone else', () => {
+    expect(planGoogleMerge({ ...base, googleOwnerId: 'other' }).ok).toBe(false);
+  });
+});
+
+describe('preferEmailOwner', () => {
+  it('keeps a verified row ahead of a password row', () => {
+    const verified = { id: 'v', emailVerified: true, hasPassword: false };
+    const password = { id: 'p', emailVerified: false, hasPassword: true };
+    expect(preferEmailOwner([password, verified])?.id).toBe('v');
   });
 });
 

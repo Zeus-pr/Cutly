@@ -161,7 +161,8 @@ app.post('/api/auth/google', async (req, res) => {
   if (!limited.ok) return res.status(429).json({ error: `Too many Google attempts. Try again in ${limited.retryAfterSec}s.` });
   const parsed = z.object({ idToken: z.string().min(20) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Google sign-in did not return a token.' });
-  return handle(res, () => signInWithGoogle(parsed.data.idToken));
+  const mergeToken = bearer(req);
+  return handle(res, () => signInWithGoogle(parsed.data.idToken, mergeToken || undefined));
 });
 app.post('/api/auth/otp/send', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'otp-send'), 8, 15 * 60_000);
