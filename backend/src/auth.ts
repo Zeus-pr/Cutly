@@ -17,6 +17,7 @@ export type PublicUser = {
   gender?: string | null;
   dateOfBirth?: string | null;
   inviteCode?: string | null;
+  googleLinked?: boolean;
 };
 
 /** Fail closed if JWT_SECRET missing (SEC-10). */
@@ -40,6 +41,7 @@ function publicUser(user: {
   gender?: string | null;
   dateOfBirth?: Date | null;
   inviteCode?: string | null;
+  googleSub?: string | null;
 }): PublicUser {
   return {
     id: user.id,
@@ -48,7 +50,8 @@ function publicUser(user: {
     name: user.name,
     gender: user.gender ?? null,
     dateOfBirth: dateOnly(user.dateOfBirth),
-    inviteCode: user.inviteCode ?? null
+    inviteCode: user.inviteCode ?? null,
+    googleLinked: Boolean(user.googleSub)
   };
 }
 
@@ -69,6 +72,22 @@ const SIGNUP_TAKEN = 'Could not create that account. Try another email or phone,
 
 export function normalEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+/** Whole-address match. `_` and `%` stay literal, unlike a Postgres ILIKE. */
+export function sameEmail(stored: string, typed: string) {
+  return normalEmail(stored) === normalEmail(typed);
+}
+
+async function findUsersByEmail(email: string) {
+  const normalised = normalEmail(email);
+  const ids = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "User"
+    WHERE email IS NOT NULL AND lower(btrim(email)) = ${normalised}
+    LIMIT 5
+  `;
+  if (!ids.length) return [];
+  return prisma.user.findMany({ where: { id: { in: ids.map((row) => row.id) } } });
 }
 
 export async function signUp(email: string, password: string, phone: string, name?: string) {
@@ -170,9 +189,7 @@ export async function updateProfileName(token: string, name: string) {
 }
 
 export async function signIn(email: string, password: string) {
-  const matches = await prisma.user.findMany({
-    where: { email: { equals: normalEmail(email), mode: 'insensitive' } }
-  });
+  const matches = await findUsersByEmail(email);
   for (const user of matches) {
     if (user.passwordHash && (await bcrypt.compare(password, user.passwordHash))) {
       const profile = publicUser(user);
@@ -242,8 +259,9 @@ export type GoogleLinkPlan =
       storeEmail: string | null;
       markEmailVerified: boolean;
       reclaimFromUserId: string | null;
+      reclaimEmail: string | null;
     }
-  | { kind: 'create'; email: string | null; reclaimFromUserId: string | null }
+  | { kind: 'create'; email: string | null; reclaimFromUserId: string | null; reclaimEmail: string | null }
   | { kind: 'reject'; message: string };
 
 /**
@@ -262,7 +280,7 @@ export function planGoogleLink(input: {
   const reclaimTarget = other && !other.emailVerified && !other.hasPassword ? other : null;
 
   if (bySub) {
-    const matchesStored = Boolean(trustedEmail && bySub.email === trustedEmail);
+    const matchesStored = Boolean(trustedEmail && bySub.email && sameEmail(bySub.email, trustedEmail));
     const fillEmpty = Boolean(trustedEmail && !bySub.email && !other);
     const reclaim = Boolean(trustedEmail && !bySub.email && reclaimTarget);
     return {
@@ -270,7 +288,8 @@ export function planGoogleLink(input: {
       userId: bySub.id,
       storeEmail: fillEmpty || reclaim ? trustedEmail : null,
       markEmailVerified: matchesStored || fillEmpty || reclaim,
-      reclaimFromUserId: reclaim && reclaimTarget ? reclaimTarget.id : null
+      reclaimFromUserId: reclaim && reclaimTarget ? reclaimTarget.id : null,
+      reclaimEmail: reclaim && reclaimTarget?.email ? reclaimTarget.email : null
     };
   }
 
@@ -279,11 +298,23 @@ export function planGoogleLink(input: {
     if (!sameGoogle) {
       return { kind: 'reject', message: 'This Google account does not match that email on CUTLY.' };
     }
-    return { kind: 'link', userId: byEmail.id, storeEmail: null, markEmailVerified: true, reclaimFromUserId: null };
+    return {
+      kind: 'link',
+      userId: byEmail.id,
+      storeEmail: null,
+      markEmailVerified: true,
+      reclaimFromUserId: null,
+      reclaimEmail: null
+    };
   }
 
   if (reclaimTarget && trustedEmail) {
-    return { kind: 'create', email: trustedEmail, reclaimFromUserId: reclaimTarget.id };
+    return {
+      kind: 'create',
+      email: trustedEmail,
+      reclaimFromUserId: reclaimTarget.id,
+      reclaimEmail: reclaimTarget.email
+    };
   }
 
   if (other?.hasPassword) {
@@ -293,7 +324,7 @@ export function planGoogleLink(input: {
     };
   }
 
-  return { kind: 'create', email: trustedEmail, reclaimFromUserId: null };
+  return { kind: 'create', email: trustedEmail, reclaimFromUserId: null, reclaimEmail: null };
 }
 
 /** Stale reclaim or a unique clash: look the profiles up once more. */
@@ -346,29 +377,31 @@ async function linkGoogleToSignedIn(googleSub: string, email: string | null, nam
   });
   if (!plan.ok) throw new Error(plan.message);
   if (!account.email && email) {
-    const taken = await prisma.user.findFirst({
-      where: { email: { equals: email, mode: 'insensitive' }, NOT: { id: account.id } }
-    });
-    if (taken) throw new Error('That email is already on another account.');
+    const holders = await findUsersByEmail(email);
+    if (holders.some((row) => row.id !== account.id)) throw new Error('That email is already on another account.');
   }
-  const user = await prisma.user.update({
-    where: { id: account.id },
-    data: {
-      googleSub,
-      email: account.email ? normalEmail(account.email) : email,
-      emailVerified: true,
-      name: account.name || name
-    }
-  });
+  let user;
+  try {
+    user = await prisma.user.update({
+      where: { id: account.id },
+      data: {
+        googleSub,
+        email: account.email || email,
+        emailVerified: true,
+        name: account.name || name
+      }
+    });
+  } catch (error) {
+    if (isPrismaUniqueConflict(error)) throw new Error('That email is already on another account.');
+    throw error;
+  }
   const profile = publicUser(user);
   return { token: signToken(profile), user: profile };
 }
 
 async function finishGoogleSignIn(googleSub: string, email: string | null, name: string | null) {
   const bySub = await prisma.user.findUnique({ where: { googleSub } });
-  const emailRows = email
-    ? await prisma.user.findMany({ where: { email: { equals: email, mode: 'insensitive' } } })
-    : [];
+  const emailRows = email ? await findUsersByEmail(email) : [];
   const byEmail = preferEmailOwner(
     emailRows.map((row) => ({ ...row, hasPassword: Boolean(row.passwordHash) }))
   );
@@ -398,11 +431,11 @@ async function finishGoogleSignIn(googleSub: string, email: string | null, name:
   const linked = plan.kind === 'link' ? (plan.userId === bySub?.id ? bySub : byEmail) : null;
   const user = await prisma.$transaction(async (tx) => {
     if (plan.reclaimFromUserId) {
-      if (!email) throw new GoogleLinkRetry();
+      if (!plan.reclaimEmail) throw new GoogleLinkRetry();
       const cleared = await tx.user.updateMany({
         where: {
           id: plan.reclaimFromUserId,
-          email,
+          email: plan.reclaimEmail,
           emailVerified: false,
           passwordHash: null
         },

@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import {
   GoogleLinkRetry,
   normalEmail,
+  sameEmail,
   planGoogleLink,
   planGoogleMerge,
   preferEmailOwner,
@@ -57,6 +58,14 @@ describe('planGoogleMerge', () => {
   it('refuses a Google login that belongs to someone else', () => {
     expect(planGoogleMerge({ ...base, googleOwnerId: 'other' }).ok).toBe(false);
   });
+
+  it('refuses an unverified Google email', () => {
+    expect(planGoogleMerge({ ...base, trustedEmail: null }).ok).toBe(false);
+  });
+
+  it('refuses a Google email that does not match the account', () => {
+    expect(planGoogleMerge({ ...base, trustedEmail: 'other@cutly.buzz' }).ok).toBe(false);
+  });
 });
 
 describe('preferEmailOwner', () => {
@@ -64,6 +73,13 @@ describe('preferEmailOwner', () => {
     const verified = { id: 'v', emailVerified: true, hasPassword: false };
     const password = { id: 'p', emailVerified: false, hasPassword: true };
     expect(preferEmailOwner([password, verified])?.id).toBe('v');
+  });
+});
+
+describe('sameEmail', () => {
+  it('does not treat underscore as a wildcard', () => {
+    expect(sameEmail('a_b@x.com', 'axb@x.com')).toBe(false);
+    expect(sameEmail('a_b@x.com', 'A_B@x.com')).toBe(true);
   });
 });
 
@@ -107,7 +123,8 @@ describe('planGoogleLink (SEC-03)', () => {
     expect(planGoogleLink({ googleSub, trustedEmail, bySub: null, byEmail: null })).toEqual({
       kind: 'create',
       email: trustedEmail,
-      reclaimFromUserId: null
+      reclaimFromUserId: null,
+      reclaimEmail: null
     });
   });
 
@@ -133,7 +150,7 @@ describe('planGoogleLink (SEC-03)', () => {
         bySub: null,
         byEmail: hit({ id: 'typed', emailVerified: false })
       })
-    ).toEqual({ kind: 'create', email: trustedEmail, reclaimFromUserId: 'typed' });
+    ).toEqual({ kind: 'create', email: trustedEmail, reclaimFromUserId: 'typed', reclaimEmail: 'guest@cutly.buzz' });
   });
 
   it('links when the stored email was already verified and has no other Google account', () => {
@@ -144,7 +161,14 @@ describe('planGoogleLink (SEC-03)', () => {
         bySub: null,
         byEmail: hit({ id: 'verified', emailVerified: true })
       })
-    ).toEqual({ kind: 'link', userId: 'verified', storeEmail: null, markEmailVerified: true, reclaimFromUserId: null });
+    ).toEqual({
+      kind: 'link',
+      userId: 'verified',
+      storeEmail: null,
+      markEmailVerified: true,
+      reclaimFromUserId: null,
+      reclaimEmail: null
+    });
   });
 
   it('rejects replacing a different googleSub', () => {
@@ -171,7 +195,8 @@ describe('planGoogleLink (SEC-03)', () => {
       userId: 'mine',
       storeEmail: trustedEmail,
       markEmailVerified: true,
-      reclaimFromUserId: 'squat'
+      reclaimFromUserId: 'squat',
+      reclaimEmail: 'guest@cutly.buzz'
     });
   });
 
@@ -182,7 +207,8 @@ describe('planGoogleLink (SEC-03)', () => {
       userId: 'mine',
       storeEmail: null,
       markEmailVerified: true,
-      reclaimFromUserId: null
+      reclaimFromUserId: null,
+      reclaimEmail: null
     });
   });
 });

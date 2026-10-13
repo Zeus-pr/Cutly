@@ -12,6 +12,7 @@ type SessionState = {
   gender: string | null;
   /** YYYY-MM-DD from the native date picker. */
   dateOfBirth: string | null;
+  googleLinked: boolean;
   city: string;
   introDone: boolean;
   /** Session-only: PatternWaves launch → Get Started tapped. */
@@ -31,6 +32,7 @@ type SessionState = {
     name?: string | null;
     gender?: string | null;
     dateOfBirth?: string | null;
+    googleLinked?: boolean;
   }) => void;
   setCity: (city: string) => void;
   passIntro: () => void;
@@ -72,6 +74,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   name: null,
   gender: null,
   dateOfBirth: null,
+  googleLinked: false,
   city: 'Burdwan',
   introDone: false,
   launchDone: false,
@@ -93,7 +96,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       email: profile.email === undefined ? get().email : profile.email,
       name: profile.name === undefined ? get().name : profile.name,
       gender: profile.gender === undefined ? get().gender : profile.gender,
-      dateOfBirth: profile.dateOfBirth === undefined ? get().dateOfBirth : profile.dateOfBirth
+      dateOfBirth: profile.dateOfBirth === undefined ? get().dateOfBirth : profile.dateOfBirth,
+      googleLinked: profile.googleLinked === undefined ? get().googleLinked : profile.googleLinked
     };
     set(next);
     void SecureStore.setItemAsync(phoneKey, next.phone || '');
@@ -183,6 +187,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       name: null,
       gender: null,
       dateOfBirth: null,
+      googleLinked: false,
       introDone: false,
       launchDone: false,
       audience: null

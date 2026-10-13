@@ -12,14 +12,18 @@ type SessionUser = {
   name: string | null;
   gender?: string | null;
   dateOfBirth?: string | null;
+  googleLinked?: boolean;
 };
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function post<T>(path: string, body: unknown, token?: string): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${apiBase()}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
       body: JSON.stringify(body)
     });
   } catch {
@@ -38,7 +42,8 @@ function save(session: { token: string; user: SessionUser }) {
     email: user.email,
     name: user.name,
     gender: user.gender ?? null,
-    dateOfBirth: user.dateOfBirth ?? null
+    dateOfBirth: user.dateOfBirth ?? null,
+    googleLinked: Boolean(user.googleLinked)
   });
 }
 
@@ -119,19 +124,7 @@ export const auth = {
   linkGoogle: async (idToken: string) => {
     const token = useSessionStore.getState().accessToken;
     if (!token) throw new Error('Sign in again.');
-    let response: Response;
-    try {
-      response = await fetch(`${apiBase()}/auth/google`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ idToken })
-      });
-    } catch {
-      throw new Error('Cannot reach the CUTLY server. Start it with npm run backend:dev.');
-    }
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || 'Request failed');
-    return save(payload.data);
+    return save(await post('/auth/google', { idToken }, token));
   },
   sendOtp: (phone: string) => post<{ sent: boolean }>('/auth/otp/send', { phone }),
   verifyOtp: async (phone: string, code: string) => save(await post('/auth/otp/verify', { phone, code }))
