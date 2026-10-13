@@ -12,14 +12,18 @@ type SessionUser = {
   name: string | null;
   gender?: string | null;
   dateOfBirth?: string | null;
+  googleLinked?: boolean;
 };
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function post<T>(path: string, body: unknown, token?: string): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${apiBase()}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
       body: JSON.stringify(body)
     });
   } catch {
@@ -38,7 +42,8 @@ function save(session: { token: string; user: SessionUser }) {
     email: user.email,
     name: user.name,
     gender: user.gender ?? null,
-    dateOfBirth: user.dateOfBirth ?? null
+    dateOfBirth: user.dateOfBirth ?? null,
+    googleLinked: Boolean(user.googleLinked)
   });
 }
 
@@ -116,6 +121,11 @@ export const auth = {
     save(await post('/auth/signup', { email, password, phone })),
   signIn: async (email: string, password: string) => save(await post('/auth/login', { email, password })),
   google: async (idToken: string) => save(await post('/auth/google', { idToken })),
+  linkGoogle: async (idToken: string) => {
+    const token = useSessionStore.getState().accessToken;
+    if (!token) throw new Error('Sign in again.');
+    return save(await post('/auth/google', { idToken }, token));
+  },
   sendOtp: (phone: string) => post<{ sent: boolean }>('/auth/otp/send', { phone }),
   verifyOtp: async (phone: string, code: string) => save(await post('/auth/otp/verify', { phone, code }))
 };

@@ -1,4 +1,4 @@
-import { useState, type ComponentProps } from 'react';
+import { useEffect, useState, type ComponentProps } from 'react';
 import {
   Linking,
   Modal,
@@ -20,7 +20,7 @@ import { PrimaryButton } from '@/components/PrimaryButton';
 import { ScreenBack } from '@/components/ScreenBack';
 import { fontFamily } from '@/constants/fonts';
 import { radii, spacing, type Palette } from '@/constants/theme';
-import { deleteAccount, updateProfile } from '@/services/auth';
+import { auth, deleteAccount, refreshProfile, updateProfile } from '@/services/auth';
 import { appAlert, appConfirm } from '@/store/useDialogStore';
 import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
 import { useSessionStore } from '@/store/useSessionStore';
@@ -51,6 +51,7 @@ export default function Profile() {
   const phone = useSessionStore((state) => state.phone);
   const name = useSessionStore((state) => state.name);
   const gender = useSessionStore((state) => state.gender);
+  const googleLinked = useSessionStore((state) => state.googleLinked);
   const display = name?.trim() || 'Add your name';
   const contact = phone || email || '';
   const version = Constants.expoConfig?.version || '1.0.0';
@@ -62,6 +63,10 @@ export default function Profile() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    void refreshProfile();
+  }, []);
 
   function openEdit() {
     setDraft(name || '');
@@ -92,6 +97,23 @@ export default function Profile() {
       setError(err instanceof Error ? err.message : 'Could not save profile.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function linkGoogleAccount() {
+    try {
+      const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+      const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
+      GoogleSignin.configure({ webClientId });
+      await GoogleSignin.hasPlayServices();
+      const result = await GoogleSignin.signIn();
+      if (result.type === 'cancelled') return;
+      const idToken = result.data?.idToken;
+      if (!idToken) throw new Error('Google did not return a sign-in token.');
+      await auth.linkGoogle(idToken);
+      appAlert('Google linked', 'This account can now use Continue with Google.');
+    } catch (err) {
+      appAlert('Could not link Google', err instanceof Error ? err.message : 'Try again.');
     }
   }
 
@@ -150,6 +172,15 @@ export default function Profile() {
       icon: 'logo-whatsapp',
       onPress: () => void Linking.openURL('https://wa.me/919000000000')
     },
+    ...(googleLinked
+      ? []
+      : [
+          {
+            label: 'Link Google' as const,
+            icon: 'logo-google' as const,
+            onPress: () => void linkGoogleAccount()
+          }
+        ]),
     { label: "FAQ's", icon: 'information-circle-outline', onPress: () => router.push('/legal/faq') },
     { label: 'Terms & Conditions', icon: 'document-text-outline', onPress: () => router.push('/legal/terms') },
     { label: 'Privacy Policy', icon: 'shield-checkmark-outline', onPress: () => router.push('/legal/privacy') },
