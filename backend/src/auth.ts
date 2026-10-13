@@ -81,8 +81,6 @@ export function sameEmail(stored: string, typed: string) {
 
 async function findUsersByEmail(email: string) {
   const normalised = normalEmail(email);
-  const exact = await prisma.user.findUnique({ where: { email: normalised } });
-  if (exact) return [exact];
   const ids = await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "User"
     WHERE email IS NOT NULL AND lower(btrim(email)) = ${normalised}
