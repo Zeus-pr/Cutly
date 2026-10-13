@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import twilio from 'twilio';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient, type User } from '@prisma/client';
 import { assertDateOfBirth } from '../../utils/dateOfBirth';
 
 const prisma = new PrismaClient();
@@ -81,13 +81,12 @@ export function sameEmail(stored: string, typed: string) {
 
 async function findUsersByEmail(email: string) {
   const normalised = normalEmail(email);
-  const ids = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT id FROM "User"
+  return prisma.$queryRaw<User[]>`
+    SELECT * FROM "User"
     WHERE email IS NOT NULL AND lower(btrim(email)) = ${normalised}
+    ORDER BY id
     LIMIT 5
   `;
-  if (!ids.length) return [];
-  return prisma.user.findMany({ where: { id: { in: ids.map((row) => row.id) } } });
 }
 
 export async function signUp(email: string, password: string, phone: string, name?: string) {
