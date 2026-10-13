@@ -1,14 +1,23 @@
 import { getApiBaseUrl } from '@/services/apiBase';
 import { useSessionStore } from '@/store/useSessionStore';
 
-const base = getApiBaseUrl();
+function apiBase() {
+  return getApiBaseUrl();
+}
 
-type SessionUser = { id: string; email: string | null; phone: string | null; name: string | null; gender?: string | null };
+type SessionUser = {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  name: string | null;
+  gender?: string | null;
+  dateOfBirth?: string | null;
+};
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${base}${path}`, {
+    response = await fetch(`${apiBase()}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -22,21 +31,38 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 function save(session: { token: string; user: SessionUser }) {
-  useSessionStore.getState().setSession(session.token, session.user.phone || '', session.user.email, session.user.name);
+  const user = session.user;
+  useSessionStore.getState().setSession(session.token, user.phone || '', user.email, user.name);
+  useSessionStore.getState().setProfile({
+    phone: user.phone,
+    email: user.email,
+    name: user.name,
+    gender: user.gender ?? null,
+    dateOfBirth: user.dateOfBirth ?? null
+  });
 }
 
-export async function refreshProfile() {
+/** Pull the account from the server so every phone on this number shares one profile. */
+export async function refreshProfile(): Promise<'ok' | 'unauthorized' | 'offline'> {
   const token = useSessionStore.getState().accessToken;
-  if (!token) return;
+  if (!token) return 'unauthorized';
   try {
-    const response = await fetch(`${base}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(`${apiBase()}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) return;
+    if (response.status === 401) return 'unauthorized';
+    if (!response.ok) return 'offline';
     const user = payload.data as SessionUser;
     useSessionStore.getState().setProfile(user);
+    return 'ok';
   } catch {
-    // Keep the name already stored on the device.
+    return 'offline';
   }
+}
+
+export function dropExpiredSession() {
+  const session = useSessionStore.getState();
+  session.clear();
+  session.passLaunch();
 }
 
 export async function updateProfileName(name: string) {
@@ -48,13 +74,14 @@ export async function updateProfile(input: {
   phone?: string;
   email?: string;
   gender?: string;
+  dateOfBirth?: string;
   inviteCode?: string;
 }) {
   const token = useSessionStore.getState().accessToken;
   if (!token) throw new Error('Sign in again.');
   let response: Response;
   try {
-    response = await fetch(`${base}/auth/profile`, {
+    response = await fetch(`${apiBase()}/auth/profile`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(input)
@@ -66,6 +93,22 @@ export async function updateProfile(input: {
   if (!response.ok) throw new Error(payload.error || 'Could not save profile.');
   const user = payload.data as SessionUser;
   useSessionStore.getState().setProfile(user);
+}
+
+export async function deleteAccount() {
+  const token = useSessionStore.getState().accessToken;
+  if (!token) throw new Error('Sign in again.');
+  let response: Response;
+  try {
+    response = await fetch(`${apiBase()}/auth/account`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+  } catch {
+    throw new Error('Cannot reach the CUTLY server. Start it with npm run backend:dev.');
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Could not delete account.');
 }
 
 export const auth = {

@@ -59,9 +59,11 @@ model User {
   phone String? @unique
   email String? @unique
   name String?
-  /** male | female | other | prefer_not — optional onboarding. */
+  /** male | female | other | prefer_not — required before home. */
   gender String?
-  /** Optional referral / invite code from onboarding. */
+  /** Date of birth from the native picker. Must be 13+ on the day they sign up. */
+  dateOfBirth DateTime? @db.Date
+  /** Optional referral / invite code from onboarding. Not redeemed yet. */
   inviteCode String?
   passwordHash String?
   googleSub String? @unique

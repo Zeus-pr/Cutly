@@ -82,7 +82,6 @@ export default function MyAppointmentsScreen() {
                 key={item.id}
                 onPress={() => setTab(item.id)}
                 style={[styles.chip, selected && styles.chipOn]}
-                selected={selected}
                 haptic
                 accessibilityRole="tab"
                 accessibilityState={{ selected }}
@@ -163,7 +162,7 @@ function BookingRow({ booking, fromTab }: { booking: Booking; fromTab: VisitTabI
       <Text style={styles.when}>{formatDateTime(booking.startsAt)}</Text>
       {booking.verifyPin ? <Text style={styles.pin}>Visit code {booking.verifyPin}</Text> : null}
       <Text style={styles.code}>
-        {booking.bookingCode} · {formatINR(booking.advancePaise)}
+        {booking.bookingCode} · {formatINR(booking.totalPaise)}
       </Text>
     </PressScale>
   );
@@ -205,10 +204,10 @@ function bookingStyles(colors: Palette) {
     },
     chips: { gap: 8, paddingRight: spacing.md },
     chip: {
+      height: 36,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
-      paddingVertical: 9,
       paddingHorizontal: 14,
       borderRadius: radii.pill,
       backgroundColor: colors.surface,
@@ -216,12 +215,13 @@ function bookingStyles(colors: Palette) {
       borderColor: colors.line
     },
     chipOn: {
-      backgroundColor: colors.ink,
-      borderColor: colors.ink
+      backgroundColor: colors.accent,
+      borderColor: colors.accent
     },
     chipLabel: {
       fontFamily: fontFamily.semibold,
       fontSize: 13,
+      lineHeight: 16,
       color: colors.muted
     },
     chipLabelOn: { color: colors.white },

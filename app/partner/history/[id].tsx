@@ -117,7 +117,6 @@ export default function PartnerHistoryDetail() {
               value={formatINR(item.totalPaise ?? item.advancePaise)}
               styles={styles}
             />
-            <Row label="Advance" value={formatINR(item.advancePaise)} styles={styles} />
             {typeof item.collectedPaise === 'number' ? (
               <Row label="Collected" value={formatINR(item.collectedPaise)} styles={styles} />
             ) : null}
@@ -154,8 +153,7 @@ export default function PartnerHistoryDetail() {
             item.status === 'REJECTED' ||
             item.paymentStatus === 'REFUNDED') && (
             <Text style={styles.policy}>
-              Policy: reject / cancel while awaiting → refund advance. Within 12h of a confirmed
-              visit → shop keeps advance.
+              Cancel free until 12 hours before a confirmed visit. The bill is paid at the shop.
             </Text>
           )}
         </ScrollView>

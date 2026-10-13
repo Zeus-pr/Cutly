@@ -32,14 +32,14 @@ export const lightColors: Palette = {
 };
 
 export const darkColors: Palette = {
-  canvas: '#121820',
-  surface: '#1C2636',
+  canvas: '#000000',
+  surface: '#141414',
   ink: '#F7F4EE',
-  muted: '#9AA6B5',
-  line: 'rgba(247,244,238,0.14)',
+  muted: '#B7B7B7',
+  line: 'rgba(255,255,255,0.28)',
   accent: '#F06B55',
   accentDark: '#FF8B78',
-  sand: '#2A3344',
+  sand: '#242424',
   success: '#5DAB84',
   warning: '#E2B15A',
   danger: '#FF8A80',

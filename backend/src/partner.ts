@@ -765,6 +765,7 @@ function mapRequestRow(row: {
   status: string;
   startsAt: Date;
   endsAt: Date;
+  totalPaise: number;
   advancePaise: number;
   user: { name: string | null; phone: string | null };
   barber: { id: string; name: string };
@@ -781,6 +782,7 @@ function mapRequestRow(row: {
     service: row.services.map((item) => item.service.name).join(', ') || 'Appointment',
     barberName: row.barber.name,
     barberId: row.barber.id,
+    totalPaise: row.totalPaise,
     advancePaise: row.advancePaise,
     actions: nextShopRequestActions(row.status as BookingState)
   };
@@ -881,7 +883,6 @@ export async function partnerDashboard(token: string) {
   const hourCounts = new Map<number, number>();
   for (let hour = 9; hour <= 21; hour += 1) hourCounts.set(hour, 0);
   let revenuePaise = 0;
-  let advanceCollectedPaise = 0;
   let remainingPaise = 0;
   for (const row of rows) {
     const hour = Number(formatIST(row.startsAt, { hour: 'numeric', hour12: false }));
@@ -894,8 +895,7 @@ export async function partnerDashboard(token: string) {
       row.status === 'AWAITING_SHOP'
     ) {
       const money = bookingMoney(row);
-      // CJ-41: revenue = cash collected; remaining clears on Done (or collect-balance).
-      advanceCollectedPaise += Math.min(money.collectedPaise, row.advancePaise);
+      // Revenue = cash collected at the shop. No separate advance bucket.
       remainingPaise += money.remainingPaise;
       revenuePaise += money.collectedPaise;
     }
@@ -922,7 +922,7 @@ export async function partnerDashboard(token: string) {
       rows.filter((row) => row.status === 'IN_SERVICE' || row.status === 'ARRIVED').length + activeWalkIns.length,
     done: rows.filter((row) => row.status === 'COMPLETED').length + walkInRows.filter((row) => row.status === 'COMPLETED').length,
     revenuePaise,
-    advanceCollectedPaise,
+    advanceCollectedPaise: 0,
     remainingPaise,
     openSlots,
     peakHour: peak && peak.count > 0 ? peak.label : null,
@@ -1008,7 +1008,7 @@ export async function respondToBookingRequest(
   } else {
     void notifyUser(updated.userId, {
       title: 'Booking rejected',
-      body: `${shop.name} could not take this visit · advance refunded (test)`,
+      body: `${shop.name} could not take this visit`,
       data: { bookingId: updated.id, screen: 'booking' }
     });
   }
@@ -1116,7 +1116,7 @@ export async function updatePartnerBookingStatus(token: string, bookingId: strin
     }
   }
 
-  // No-show keeps advance (no refund) — payment stays CAPTURED.
+  // No-show does not refund. Payment stays as recorded.
   const updated = await prisma.booking.update({
     where: { id: booking.id },
     data: { status },
@@ -1130,7 +1130,7 @@ export async function updatePartnerBookingStatus(token: string, bookingId: strin
   if (status === 'NO_SHOW') {
     void notifyUser(updated.userId, {
       title: 'Marked as no-show',
-      body: `${shop.name} · ${updated.bookingCode} · advance kept by shop`,
+      body: `${shop.name} · ${updated.bookingCode} · marked no-show`,
       data: { bookingId: updated.id, screen: 'booking' }
     });
   }

@@ -20,7 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CodeSlots } from '@/components/CodeSlots';
 import { PressScale } from '@/components/PressScale';
 import { auth } from '@/services/auth';
-import { useSessionStore } from '@/store/useSessionStore';
+import { customerProfileReady, useSessionStore } from '@/store/useSessionStore';
 import { fontFamily } from '@/constants/fonts';
 import { lightColors, radii, spacing } from '@/constants/theme';
 
@@ -59,8 +59,8 @@ export default function Auth() {
   }, [fade]);
 
   function afterAuth() {
-    const name = useSessionStore.getState().name?.trim();
-    if (!name) {
+    const session = useSessionStore.getState();
+    if (!customerProfileReady(session)) {
       router.replace('/complete-profile');
       return;
     }

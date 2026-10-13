@@ -10,25 +10,24 @@ import Animated, {
   useSharedValue,
   withTiming
 } from 'react-native-reanimated';
+import { PayBillSheet } from '@/components/PayBillSheet';
 import { fontFamily } from '@/constants/fonts';
 import { type Palette } from '@/constants/theme';
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
 
-const BAR_TABS = new Set(['index', 'salons', 'studios', 'spas']);
+const BAR_TABS = new Set(['index', 'bookings', 'profile']);
 
 /** Explicit labels — avoid descriptor truncation / Clash glyph clip on edge tabs. */
 const TAB_LABELS: Record<string, string> = {
   index: 'Home',
-  salons: 'Salons',
-  studios: 'Studios',
-  spas: 'Spas'
+  bookings: 'Visits',
+  profile: 'Profile'
 };
 
 const icons: Record<string, { on: keyof typeof Ionicons.glyphMap; off: keyof typeof Ionicons.glyphMap }> = {
   index: { on: 'home', off: 'home-outline' },
-  salons: { on: 'cut', off: 'cut-outline' },
-  studios: { on: 'brush', off: 'brush-outline' },
-  spas: { on: 'leaf', off: 'leaf-outline' }
+  bookings: { on: 'calendar', off: 'calendar-outline' },
+  profile: { on: 'person', off: 'person-outline' }
 };
 
 const move = {
@@ -52,29 +51,34 @@ type Props = {
 
 type TabLayout = { x: number; width: number };
 
-/** Flush Luzo-style bar: Home / Salons · Pay Bill · Studios / Spas + sliding underline. */
+/** Home · Discover · Pay Bill · Visits · Profile. Salons / Studios / Spas stay as hidden tabs. */
 export function CustomerTabBar({ state, descriptors, navigation, insets }: Props) {
   const colors = useColors();
   const styles = useThemedStyles(barStyles);
   const reduced = useReducedMotion();
   const routes = state.routes.filter((route) => BAR_TABS.has(route.name));
   // Stable order: Home, Salons | Pay Bill | Studios, Spas
-  const ordered = ['index', 'salons', 'studios', 'spas']
+  const ordered = ['index', 'bookings', 'profile']
     .map((name) => routes.find((r) => r.name === name))
     .filter((r): r is Route => Boolean(r));
-  const left = ordered.filter((r) => r.name === 'index' || r.name === 'salons');
-  const right = ordered.filter((r) => r.name === 'studios' || r.name === 'spas');
+  const home = ordered.filter((r) => r.name === 'index');
+  const right = ordered.filter((r) => r.name === 'bookings' || r.name === 'profile');
 
   const [layouts, setLayouts] = useState<Record<string, TabLayout>>({});
+  const [payOpen, setPayOpen] = useState(false);
   const underlineX = useSharedValue(0);
   const underlineW = useSharedValue(UNDERLINE);
 
   const focusedRoute = state.routes[state.index];
+  const discoverFocused = focusedRoute?.name === 'explore';
   const focusedVisible = Boolean(focusedRoute && ordered.some((r) => r.key === focusedRoute.key));
+  const showUnderline = focusedVisible || discoverFocused;
 
   useEffect(() => {
-    if (!focusedVisible || !focusedRoute) return;
-    const layout = layouts[focusedRoute.key];
+    if (!showUnderline) return;
+    const layoutKey = discoverFocused ? 'discover' : focusedRoute?.key;
+    if (!layoutKey) return;
+    const layout = layouts[layoutKey];
     if (!layout) return;
     const nextX = layout.x + (layout.width - UNDERLINE) / 2;
     if (reduced) {
@@ -84,7 +88,7 @@ export function CustomerTabBar({ state, descriptors, navigation, insets }: Props
     }
     underlineX.set(withTiming(nextX, move));
     underlineW.set(withTiming(UNDERLINE, move));
-  }, [focusedRoute, focusedVisible, layouts, reduced, underlineX, underlineW]);
+  }, [discoverFocused, focusedRoute, layouts, reduced, showUnderline, underlineX, underlineW]);
 
   const underlineStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: underlineX.get() }],
@@ -132,31 +136,53 @@ export function CustomerTabBar({ state, descriptors, navigation, insets }: Props
   return (
     <View style={[styles.wrap, { paddingBottom: Math.max(insets.bottom, 6) }]}>
       <View style={styles.bar}>
-        {left.map(renderTab)}
+        {home.map(renderTab)}
+        <Pressable
+          style={styles.tab}
+          onLayout={(e) => onTabLayout('discover', e)}
+          onPress={() => {
+            if (discoverFocused) return;
+            void Haptics.selectionAsync();
+            navigation.navigate('explore');
+          }}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: discoverFocused }}
+          accessibilityLabel="Discover"
+        >
+          <Ionicons
+            name={discoverFocused ? 'search' : 'search-outline'}
+            size={22}
+            color={discoverFocused ? colors.accent : colors.muted}
+          />
+          <Text style={[styles.label, discoverFocused && styles.labelOn]} allowFontScaling={false} numberOfLines={1}>
+            Discover
+          </Text>
+        </Pressable>
 
         <View style={styles.fabSlot}>
           <Pressable
             style={styles.fab}
             onPress={() => {
               void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              navigation.navigate('bookings');
+              setPayOpen(true);
             }}
             accessibilityRole="button"
             accessibilityLabel="Pay Bill"
           >
-            {/* Single Text — Clash Bold clips “y” when each word is its own narrow line. */}
-            <Text style={styles.fabText} allowFontScaling={false} numberOfLines={2}>
-              {'Pay\nBill'}
-            </Text>
+            <Ionicons name="qr-code" size={26} color={colors.white} />
           </Pressable>
+          <Text style={styles.fabLabel} allowFontScaling={false} numberOfLines={1}>
+            Pay Bill
+          </Text>
         </View>
 
         {right.map(renderTab)}
 
-        {focusedVisible ? (
+        {showUnderline ? (
           <Animated.View style={[styles.underline, underlineStyle]} pointerEvents="none" />
         ) : null}
       </View>
+      <PayBillSheet visible={payOpen} onClose={() => setPayOpen(false)} />
     </View>
   );
 }
@@ -207,37 +233,35 @@ function barStyles(colors: Palette) {
     fabSlot: {
       width: 76,
       alignItems: 'center',
-      justifyContent: 'flex-start',
+      justifyContent: 'flex-end',
       zIndex: 2,
-      overflow: 'visible'
+      overflow: 'visible',
+      paddingBottom: 6
     },
     fab: {
-      width: 68,
-      height: 68,
-      marginTop: -30,
-      borderRadius: 34,
+      width: 56,
+      height: 56,
+      marginTop: -28,
+      borderRadius: 28,
       backgroundColor: colors.accent,
       alignItems: 'center',
       justifyContent: 'center',
-      paddingHorizontal: 6,
       borderWidth: 4,
       borderColor: colors.surface,
       shadowColor: colors.ink,
-      shadowOpacity: 0.14,
+      shadowOpacity: 0.16,
       shadowRadius: 10,
       shadowOffset: { width: 0, height: 4 },
-      elevation: 8,
-      overflow: 'visible'
+      elevation: 8
     },
-    fabText: {
-      fontFamily: fontFamily.semibold,
-      color: colors.white,
-      fontSize: 12,
+    fabLabel: {
+      marginTop: 2,
+      fontFamily: fontFamily.medium,
+      fontSize: 11,
       lineHeight: 14,
-      letterSpacing: 0,
+      color: colors.muted,
       textAlign: 'center',
-      includeFontPadding: false,
-      width: 52
+      includeFontPadding: false
     }
   });
 }

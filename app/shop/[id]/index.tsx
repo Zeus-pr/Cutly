@@ -229,28 +229,14 @@ export default function ShopDetail() {
         onScroll={onScroll}
       >
         <View style={styles.hero}>
-          <View style={styles.heroLeft}>
-            {photos[0] ? (
-              <Image source={photos[0]} style={styles.heroTopLeft} contentFit="cover" />
-            ) : (
-              <View style={[styles.heroTopLeft, { backgroundColor: colors.ink }]} />
-            )}
-            {photos[1] || photos[0] ? (
-              <Image source={photos[1] || photos[0]} style={styles.heroBottomLeft} contentFit="cover" />
-            ) : (
-              <View style={[styles.heroBottomLeft, { backgroundColor: colors.sand }]} />
-            )}
-          </View>
-          <View style={styles.heroRight}>
-            {photos[2] || photos[0] ? (
-              <Image source={photos[2] || photos[0]} style={styles.heroTall} contentFit="cover" />
-            ) : (
-              <LinearGradient colors={['#C4B5A5', '#A89080']} style={styles.heroTall} />
-            )}
-            <PressScale style={styles.viewGallery} onPress={() => scrollToSection('gallery')} haptic>
-              <Text style={styles.viewGalleryText}>View gallery ›</Text>
-            </PressScale>
-          </View>
+          {photos[0] ? (
+            <Image source={photos[0]} style={styles.heroPhoto} contentFit="cover" />
+          ) : (
+            <View style={[styles.heroPhoto, { backgroundColor: colors.ink }]} />
+          )}
+          <PressScale style={styles.viewGallery} onPress={() => scrollToSection('gallery')} haptic>
+            <Text style={styles.viewGalleryText}>View gallery ›</Text>
+          </PressScale>
           <ScreenBack style={styles.heroBack} onPhoto onPress={() => router.back()} />
         </View>
 
@@ -496,16 +482,12 @@ function screenStyles(colors: Palette) {
     content: { paddingBottom: 8 },
     missingWrap: { padding: spacing.md, gap: spacing.md },
     missing: { fontFamily: fontFamily.regular, fontSize: 15, color: colors.muted, textAlign: 'center' },
-    hero: { height: 228, flexDirection: 'row', gap: 3, backgroundColor: colors.sand },
-    heroLeft: { flex: 1, gap: 3 },
-    heroTopLeft: { flex: 1.1 },
-    heroBottomLeft: { flex: 1 },
-    heroRight: { flex: 1.2, position: 'relative', overflow: 'hidden' },
-    heroTall: { ...StyleSheet.absoluteFillObject },
+    hero: { height: 228, backgroundColor: colors.sand, overflow: 'hidden' },
+    heroPhoto: { width: '100%', height: 228 },
     viewGallery: {
       position: 'absolute',
       bottom: 12,
-      alignSelf: 'center',
+      right: 16,
       backgroundColor: 'rgba(20,17,16,0.6)',
       paddingHorizontal: 14,
       paddingVertical: 7,

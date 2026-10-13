@@ -28,7 +28,16 @@ import { usePlaceStore } from '@/store/usePlaceStore';
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
 import { homeSortChipLabel, sortFamily, sortShops, type HomeSort, type HomeSortFamily } from '@/utils/homeSort';
 
-type Props = { categoryId: ExploreCategoryId; showBack?: boolean };
+type Props = { categoryId?: ExploreCategoryId; showBack?: boolean; allShops?: boolean };
+
+const ALL_SHOPS = {
+  title: 'Shops',
+  heading: 'Shops near you',
+  searchPlaceholder: 'Search shops',
+  browseLabel: '',
+  browseChips: [] as string[],
+  promoLine: 'Book on CutLy'
+};
 
 /** Sort chips under the section title — one sort at a time; each opens its family in HomeSortSheet. */
 const SORT_CHIPS: { family: HomeSortFamily; defaultSort: HomeSort; label: string }[] = [
@@ -38,8 +47,8 @@ const SORT_CHIPS: { family: HomeSortFamily; defaultSort: HomeSort; label: string
   { family: 'rating', defaultSort: 'rating_desc', label: 'Rating' }
 ];
 
-export function CategoryExploreScreen({ categoryId, showBack }: Props) {
-  const category = EXPLORE_CATEGORIES[categoryId];
+export function CategoryExploreScreen({ categoryId = 'salons', showBack, allShops }: Props) {
+  const category = allShops ? ALL_SHOPS : EXPLORE_CATEGORIES[categoryId];
   const colors = useColors();
   const styles = useThemedStyles(screenStyles);
   const [query, setQuery] = useState('');
@@ -54,11 +63,12 @@ export function CategoryExploreScreen({ categoryId, showBack }: Props) {
   const lat = active?.latitude ?? DEFAULT_PLACE.latitude;
   const lng = active?.longitude ?? DEFAULT_PLACE.longitude;
 
-  const kindsParam = categoryKindQuery(category);
-  const hintsParam = category.serviceHints.length ? category.serviceHints.join(',') : undefined;
+  const kindsParam = allShops ? '' : categoryKindQuery(EXPLORE_CATEGORIES[categoryId]);
+  const hints = allShops ? [] : EXPLORE_CATEGORIES[categoryId].serviceHints;
+  const hintsParam = hints.length ? hints.join(',') : undefined;
 
   const { data = [], isLoading, isError, error, refetch, isRefetching } = useQuery({
-    queryKey: ['explore-category', categoryId, kindsParam, hintsParam, lat, lng],
+    queryKey: ['explore-category', allShops ? 'all' : categoryId, kindsParam, hintsParam, lat, lng],
     enabled: areaConfirmed,
     queryFn: () =>
       api.shops({
@@ -138,7 +148,10 @@ export function CategoryExploreScreen({ categoryId, showBack }: Props) {
               />
             </View>
 
-            <Text style={styles.browseLabel}>{category.browseLabel.toUpperCase()}</Text>
+            {category.browseChips.length ? (
+              <Text style={styles.browseLabel}>{category.browseLabel.toUpperCase()}</Text>
+            ) : null}
+            {category.browseChips.length ? (
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -167,6 +180,7 @@ export function CategoryExploreScreen({ categoryId, showBack }: Props) {
                 );
               })}
             </ScrollView>
+            ) : null}
 
             <Text style={styles.sectionTitle}>{category.heading}</Text>
 
@@ -184,7 +198,6 @@ export function CategoryExploreScreen({ categoryId, showBack }: Props) {
                     key={item.family}
                     style={[styles.sortChip, on && styles.sortChipOn]}
                     onPress={() => setSortSheet(item.family)}
-                    selected={on}
                     haptic
                     accessibilityRole="button"
                     accessibilityLabel={`Sort by ${item.label}`}
@@ -341,18 +354,18 @@ function screenStyles(colors: Palette) {
     sortScroll: { marginBottom: spacing.md, marginHorizontal: -spacing.md },
     sortRow: { gap: 8, paddingHorizontal: spacing.md },
     sortChip: {
+      height: 36,
       flexDirection: 'row',
       alignItems: 'center',
       gap: 4,
-      paddingVertical: 8,
       paddingHorizontal: 14,
       borderRadius: radii.pill,
       backgroundColor: colors.surface,
       borderWidth: 1,
       borderColor: colors.line
     },
-    sortChipOn: { backgroundColor: colors.ink, borderColor: colors.ink },
-    sortChipText: { fontFamily: fontFamily.semibold, fontSize: 13, color: colors.muted },
+    sortChipOn: { backgroundColor: colors.accent, borderColor: colors.accent },
+    sortChipText: { fontFamily: fontFamily.semibold, fontSize: 13, lineHeight: 16, color: colors.muted },
     sortChipTextOn: { color: colors.white },
     areaGate: {
       marginBottom: spacing.md,

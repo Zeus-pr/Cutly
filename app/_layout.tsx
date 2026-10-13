@@ -1,15 +1,15 @@
 import 'react-native-gesture-handler';
 import * as SecureStore from 'expo-secure-store';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StatusBar as NativeStatusBar, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router';
-import { refreshProfile } from '@/services/auth';
+import { dropExpiredSession, refreshProfile } from '@/services/auth';
 import { registerForPushNotifications, attachPushResponseListeners } from '@/services/notifications';
 import { useBookingCartStore } from '@/store/useBookingCartStore';
 import { usePlaceStore } from '@/store/usePlaceStore';
-import { useSessionStore } from '@/store/useSessionStore';
+import { customerProfileReady, useSessionStore } from '@/store/useSessionStore';
 import { useColors, useThemeStore } from '@/store/useThemeStore';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StatusBar } from 'expo-status-bar';
@@ -26,6 +26,7 @@ export function ErrorBoundary({ retry }: ErrorBoundaryProps) {
 }
 
 const ACCENT = lightColors.accent;
+const LAUNCH_BG = '#F06B55';
 /** Never hang forever if font fetch fails on flaky Metro. */
 const FONT_FAILSAFE_MS = 2500;
 const client = new QueryClient({
@@ -47,6 +48,8 @@ function SessionGate({ bootDone }: { bootDone: boolean }) {
   const hydrated = useSessionStore((state) => state.hydrated);
   const accessToken = useSessionStore((state) => state.accessToken);
   const name = useSessionStore((state) => state.name);
+  const gender = useSessionStore((state) => state.gender);
+  const dateOfBirth = useSessionStore((state) => state.dateOfBirth);
   const introDone = useSessionStore((state) => state.introDone);
   const launchDone = useSessionStore((state) => state.launchDone);
   const audience = useSessionStore((state) => state.audience);
@@ -58,7 +61,9 @@ function SessionGate({ bootDone }: { bootDone: boolean }) {
   useEffect(() => {
     // Hydrate already started at module load — only attach follow-ups.
     const run = () => {
-      void refreshProfile();
+      void refreshProfile().then((result) => {
+        if (result === 'unauthorized' && useSessionStore.getState().accessToken) dropExpiredSession();
+      });
       if (useSessionStore.getState().accessToken) void registerForPushNotifications();
       if (useSessionStore.getState().partnerToken) void registerForPushNotifications();
     };
@@ -99,7 +104,7 @@ function SessionGate({ bootDone }: { bootDone: boolean }) {
     }
 
     if (accessToken) {
-      const profileReady = Boolean(name?.trim());
+      const profileReady = customerProfileReady({ name, gender, dateOfBirth });
       if (!profileReady) {
         if (root !== 'complete-profile') router.replace('/complete-profile');
         return;
@@ -110,8 +115,7 @@ function SessionGate({ bootDone }: { bootDone: boolean }) {
         root === 'auth' ||
         root === 'role' ||
         root === 'partner' ||
-        root === 'complete-profile' ||
-        root === 'launch'
+        root === 'complete-profile'
       ) {
         router.replace('/(tabs)');
       }
@@ -128,6 +132,8 @@ function SessionGate({ bootDone }: { bootDone: boolean }) {
     bootDone,
     accessToken,
     name,
+    gender,
+    dateOfBirth,
     introDone,
     launchDone,
     audience,
@@ -151,6 +157,8 @@ export default function Layout() {
   const partnerToken = useSessionStore((state) => state.partnerToken);
   const launchDone = useSessionStore((state) => state.launchDone);
   const name = useSessionStore((state) => state.name);
+  const gender = useSessionStore((state) => state.gender);
+  const dateOfBirth = useSessionStore((state) => state.dateOfBirth);
   const setupDone = useSessionStore((state) => state.setupDone);
   const router = useRouter();
   const segments = useSegments();
@@ -170,7 +178,6 @@ export default function Layout() {
     const s = useSessionStore.getState();
     if (s.accessToken || s.partnerToken) {
       setTokenSignedIn(true);
-      setBootSplash(false);
       return;
     }
     let cancelled = false;
@@ -178,19 +185,12 @@ export default function Layout() {
       SecureStore.getItemAsync('cutly.accessToken'),
       SecureStore.getItemAsync('cutly.partnerToken')
     ]).then(([access, partner]) => {
-      if (!cancelled && (access || partner)) {
-        setTokenSignedIn(true);
-        setBootSplash(false);
-      }
+      if (!cancelled && (access || partner)) setTokenSignedIn(true);
     });
     return () => {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (signedIn) setBootSplash(false);
-  }, [signedIn]);
 
   useEffect(() => {
     if (hydrated && !signedIn && launchDone) setBootSplash(false);
@@ -205,7 +205,7 @@ export default function Layout() {
       return root === 'partner' && child !== 'auth' && child !== 'setup';
     }
     if (accessToken) {
-      if (!name?.trim()) return root === 'complete-profile';
+      if (!customerProfileReady({ name, gender, dateOfBirth })) return root === 'complete-profile';
       return root === '(tabs)';
     }
     return false;
@@ -219,14 +219,27 @@ export default function Layout() {
   }, [onHomeRoute, typeReady]);
 
   const bootDone = !bootSplash && typeReady;
-  const showBoot = bootSplash && !signedIn && !(hydrated && launchDone);
+  const showBoot = bootSplash && (signedIn || !(hydrated && launchDone));
+  const enterHome = useCallback(() => setBootSplash(false), []);
+  const getStarted = useCallback(() => {
+    const session = useSessionStore.getState();
+    session.passLaunch();
+    session.passIntro();
+    session.setAudience('customer');
+    setBootSplash(false);
+    router.replace('/auth');
+  }, [router]);
 
   return (
-    <GestureHandlerRootView style={[styles.root, { backgroundColor: ACCENT }]}>
+    <GestureHandlerRootView style={[styles.root, { backgroundColor: showBoot ? LAUNCH_BG : ACCENT }]}>
       <QueryClientProvider client={client}>
-        <StatusBar style={dark || showBoot || (signedIn && !onHomeRoute) ? 'light' : 'dark'} />
+        <StatusBar
+          style={
+            showBoot ? 'light' : dark || (signedIn && !onHomeRoute) ? 'light' : 'dark'
+          }
+        />
         <NativeStatusBar
-          backgroundColor={showBoot || (signedIn && !onHomeRoute) ? ACCENT : colors.canvas}
+          backgroundColor={showBoot ? LAUNCH_BG : signedIn && !onHomeRoute ? ACCENT : colors.canvas}
         />
         <SessionGate bootDone={bootDone} />
         {typeReady ? (
@@ -234,26 +247,21 @@ export default function Layout() {
             screenOptions={{
               headerShown: false,
               contentStyle: {
-                backgroundColor: showBoot || (signedIn && !onHomeRoute) ? ACCENT : colors.canvas
+                backgroundColor: showBoot ? LAUNCH_BG : signedIn && !onHomeRoute ? ACCENT : colors.canvas
               },
               animation: 'slide_from_right'
             }}
           />
         ) : (
-          <View style={[styles.root, { backgroundColor: ACCENT }]} />
+          <View style={[styles.root, { backgroundColor: showBoot ? LAUNCH_BG : ACCENT }]} />
         )}
         <AppDialogHost />
-        {showBoot && typeReady ? (
+        {showBoot ? (
           <PatternWavesSplash
             ready={hydrated}
-            onGetStarted={() => {
-              const session = useSessionStore.getState();
-              session.passLaunch();
-              session.passIntro();
-              session.setAudience('customer');
-              setBootSplash(false);
-              router.replace('/auth');
-            }}
+            signedIn={signedIn}
+            onGetStarted={getStarted}
+            onEnterHome={enterHome}
           />
         ) : null}
       </QueryClientProvider>

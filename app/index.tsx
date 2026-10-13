@@ -3,8 +3,8 @@ import { View } from 'react-native';
 import { useSessionStore } from '@/store/useSessionStore';
 
 /**
- * Root entry. Unsigned Get Started is `_layout` PatternWavesSplash.
- * Signed-in: native bridge → here → tabs (no second PatternWaves).
+ * Root entry. Unsigned Get Started is `_layout` launch Lottie.
+ * Signed-in: launch Lottie, then home (no Get Started).
  */
 export default function Index() {
   const hydrated = useSessionStore((state) => state.hydrated);
@@ -13,7 +13,6 @@ export default function Index() {
   const setupDone = useSessionStore((state) => state.setupDone);
   const launchDone = useSessionStore((state) => state.launchDone);
 
-  // Coral placeholder only — never BootPatternBeat (that was the signed-in “2nd animation”).
   if (!hydrated) {
     return <View style={{ flex: 1, backgroundColor: '#F06B55' }} />;
   }

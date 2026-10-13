@@ -19,7 +19,6 @@ export function HomeServiceTileCard({ tile, onPress, index = 0 }: Props) {
   const colors = useColors();
   const styles = useThemedStyles(tileStyles);
   const isAll = tile.serviceName === null;
-  const hasArt = Boolean(tile.image);
 
   return (
     <Animated.View
@@ -29,65 +28,32 @@ export function HomeServiceTileCard({ tile, onPress, index = 0 }: Props) {
         .reduceMotion(ReduceMotion.System)}
     >
       <PressScale
-        style={[styles.card, isAll && styles.cardAll]}
+        style={styles.card}
         onPress={onPress}
         haptic
         pressedScale={0.9}
         accessibilityRole="button"
         accessibilityLabel={isAll ? 'View all services' : `${tile.title}. ${tile.subtitle}`}
       >
-        {isAll ? (
-          <View style={styles.plusWrap}>
-            <Ionicons name="add" size={52} color={colors.accent} />
-            <Text style={styles.plusLabel}>View all</Text>
-          </View>
-        ) : (
-          <>
-            <View style={[styles.copy, hasArt && styles.copyWithArt]}>
-              {/* One Text per line — stops iOS soft-wrapping “WELLNESS” into both lines and eating “& SPA”. */}
-              {tile.title.split('\n').map((line, i) => (
-                <Text
-                  key={`${tile.id}-t-${i}`}
-                  style={[styles.title, i > 0 && styles.titleNext]}
-                  numberOfLines={1}
-                  allowFontScaling={false}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.7}
-                >
-                  {line}
-                </Text>
-              ))}
-              {tile.subtitle.split('\n').map((line, i) => (
-                <Text
-                  key={`${tile.id}-s-${i}`}
-                  style={[styles.sub, i === 0 && styles.subFirst]}
-                  numberOfLines={1}
-                  allowFontScaling={false}
-                >
-                  {line}
-                </Text>
-              ))}
+        <>
+            <View style={styles.copy}>
+              <Text style={styles.title} numberOfLines={1} allowFontScaling={false}>
+                {tile.title}
+              </Text>
+              <Text style={styles.sub} numberOfLines={1} allowFontScaling={false}>
+                {tile.subtitle}
+              </Text>
             </View>
             {tile.image ? (
-              <View
-                style={[
-                  styles.artWrap,
-                  tile.imageOffset && {
-                    right: tile.imageOffset.right ?? -10,
-                    bottom: tile.imageOffset.bottom ?? -8
-                  }
-                ]}
-                pointerEvents="none"
-              >
+              <View style={styles.artWrap} pointerEvents="none">
                 <Image source={tile.image} style={styles.art} contentFit="contain" />
               </View>
             ) : (
               <View style={[styles.iconBlob, { backgroundColor: `${tile.tint}18` }]}>
-                <Ionicons name={tile.icon} size={30} color={tile.tint} />
+                <Ionicons name={isAll ? 'add' : tile.icon} size={28} color={tile.tint} />
               </View>
             )}
-          </>
-        )}
+        </>
       </PressScale>
     </Animated.View>
   );
@@ -106,30 +72,24 @@ function tileStyles(colors: Palette) {
       borderRadius: radii.md,
       borderWidth: 1,
       borderColor: colors.line,
+      shadowColor: '#000000',
+      shadowOpacity: 0.08,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 2 },
+      elevation: 2,
       paddingTop: spacing.md,
       paddingHorizontal: spacing.md,
       paddingBottom: spacing.md,
       overflow: 'hidden'
     },
-    cardAll: {
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderColor: colors.accent,
-      borderStyle: 'dashed'
-    },
     copy: {
       alignSelf: 'stretch',
-      paddingRight: 56,
+      paddingRight: 72,
       zIndex: 2
-    },
-    copyWithArt: {
-      paddingRight: 4,
-      // Wider than art overlap so “WELLNESS” doesn’t soft-wrap mid-word on iPhone SE/mini.
-      maxWidth: '72%'
     },
     title: {
       fontFamily: fontFamily.bold,
-      fontSize: 15,
+      fontSize: 16,
       letterSpacing: 0,
       color: colors.ink,
       lineHeight: 18
@@ -154,23 +114,17 @@ function tileStyles(colors: Palette) {
     },
     artWrap: {
       position: 'absolute',
-      right: -10,
-      bottom: -8,
-      width: 136,
-      height: 90,
+      right: 0,
+      bottom: 0,
+      width: 112,
+      height: 88,
       zIndex: 1,
       justifyContent: 'flex-end',
       alignItems: 'flex-end'
     },
     art: {
-      width: 136,
-      height: 85
-    },
-    plusWrap: { alignItems: 'center', justifyContent: 'center', gap: 4 },
-    plusLabel: {
-      fontFamily: fontFamily.semibold,
-      fontSize: 14,
-      color: colors.accent
+      width: 112,
+      height: 84
     }
   });
 }

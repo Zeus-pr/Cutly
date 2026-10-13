@@ -34,7 +34,6 @@ import {
 import { findWalkInClash, loadActiveWalkIns } from './walkins';
 import { createRazorpayOrder, paymentsEnabled, verifyRazorpaySignature } from './razorpay';
 import {
-  advancePaiseFromTotal,
   archivedIdempotencyKey,
   bindClientIdempotencyKey,
   bookingIdempotencyKey
@@ -181,6 +180,10 @@ function mapShop(
     priceFromPaise: extras.priceFromPaise,
     nextAvailableAt: extras.nextAvailableAt,
     services: shop.services.map((row) => row.service.name),
+    menu: shop.services.map((row) => ({
+      name: row.service.name,
+      pricePaise: row.pricePaise
+    })),
     tags: shop.amenities.slice(0, 3),
     amenities: shop.amenities,
     productBrands: shop.productBrands ?? [],
@@ -952,7 +955,7 @@ export async function createBooking(token: string, input: {
   startsAt: string;
   holdId: string;
   idempotencyKey?: string;
-  /** shop = pay at shop (no Razorpay). app = 30% advance via Razorpay when enabled. */
+  /** Ignored. Bookings are pay-at-shop; there is no in-app advance. */
   payMode?: 'shop' | 'app';
 }) {
   const user = await userFromToken(token);
@@ -967,8 +970,8 @@ export async function createBooking(token: string, input: {
   });
   if (!accepting) throw new Error('Shop not found.');
   const pack = await resolveServicePackage(prisma, input.shopId, serviceIds);
-  if (input.payMode === 'app' && !paymentsEnabled()) {
-    throw new Error('In-app pay is turned off right now. Choose Pay at shop.');
+  if (input.payMode === 'app') {
+    throw new Error('Pay at the shop. In-app advance is not offered.');
   }
   const startsAt = new Date(input.startsAt);
   if (Number.isNaN(startsAt.getTime())) throw new Error('Pick a valid time.');
@@ -982,7 +985,7 @@ export async function createBooking(token: string, input: {
   const capacity = await getDayCapacity(prisma, input.shopId, bookingDay);
   if (capacity <= 0) throw new Error(CAPACITY_CLOSED_MESSAGE);
   const totalPaise = pack.totalPaise;
-  const advancePaise = advancePaiseFromTotal(totalPaise);
+  const advancePaise = 0;
 
   const holdPeek = await prisma.bookingHold.findFirst({
     where: { id: input.holdId, userId: user.id }
@@ -1103,8 +1106,8 @@ export async function createBooking(token: string, input: {
       }
       const pin = makeVerifyPin();
 
-      // Pay at shop, or PAYMENT_PROVIDER=none → AWAITING_SHOP. Pay from app → Razorpay when on.
-      const skipCheckout = input.payMode === 'shop' || !paymentsEnabled();
+      // Pay the full bill at the shop. No 30% advance checkout.
+      const skipCheckout = true;
       const created = await tx.booking.create({
         data: {
           userId: user.id,
@@ -1129,7 +1132,7 @@ export async function createBooking(token: string, input: {
             create: {
               provider: skipCheckout ? 'none' : 'razorpay',
               providerPaymentId: skipCheckout ? `direct_${Date.now()}` : `pending_${Date.now()}`,
-              amountPaise: skipCheckout && input.payMode === 'shop' ? 0 : advancePaise,
+              amountPaise: 0,
               status: skipCheckout ? 'CAPTURED' : 'PAYMENT_PENDING'
             }
           }
@@ -1498,7 +1501,7 @@ function serializeBooking(booking: NonNullable<Awaited<ReturnType<typeof loadBoo
     hasReview,
     refundOnCancel,
     cancelPolicyLabel: awaiting
-      ? 'Full advance refund — shop has not confirmed yet.'
+      ? 'Cancel free — the shop has not confirmed yet.'
       : policy.refundLabel,
     shop: {
       id: booking.shop.id,
@@ -1601,10 +1604,8 @@ export async function cancelBooking(token: string, bookingId: string) {
     minute: '2-digit'
   });
   void notifyUser(user.id, {
-    title: refundAdvance ? 'Booking cancelled · refund started' : 'Booking cancelled',
-    body: refundAdvance
-      ? `${booking.bookingCode} · advance refund in test mode`
-      : `${booking.bookingCode} · shop keeps the advance`,
+    title: 'Booking cancelled',
+    body: `${booking.bookingCode} · ${when}`,
     data: { bookingId: booking.id, screen: 'booking' }
   });
   void notifyShopPartner(booking.shopId, {

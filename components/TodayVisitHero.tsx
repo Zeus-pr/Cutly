@@ -1,35 +1,47 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { PatternWavesSurface } from '@/components/PatternWavesSurface';
+import LottieView from 'lottie-react-native';
 import { fontFamily } from '@/constants/fonts';
 import { radii } from '@/constants/theme';
 import type { Booking } from '@/types/domain';
 import { formatINR } from '@/utils/money';
 import { formatTime } from '@/utils/time';
 import {
-  todayVisitBg,
   todayVisitPhase,
   todayVisitServiceLabel,
   todayVisitShowsPin,
   todayVisitTitle
 } from '@/utils/todayVisit';
+import type { TodayVisitPhase } from '@/utils/todayVisit';
+
+const VISIT_LOTTIE: Record<TodayVisitPhase, number> = {
+  upcoming: require('@/assets/animations/visit-upcoming.json'),
+  started: require('@/assets/animations/visit-started.json'),
+  completed: require('@/assets/animations/visit-finished.json')
+};
 
 const CORAL = '#F06B55';
-const TEAL = '#05998C';
 const BLACK = '#111111';
-const TILE_BG = '#FFFFFF';
+const WHITE = '#FFFFFF';
 const TILE_H = 186;
 
 type Props = {
   booking: Booking;
   height?: number;
+  onPress?: () => void;
   onStartReview?: () => void;
   onDismissReview?: () => void;
 };
 
-/** Home hero for today’s visit — teal / gold / purple-navy waves by phase. */
-export function TodayVisitHero({ booking, height = TILE_H, onStartReview, onDismissReview }: Props) {
+/** Home hero for today’s visit — gold / teal / navy Lottie by phase. */
+export function TodayVisitHero({
+  booking,
+  height = TILE_H,
+  onPress,
+  onStartReview,
+  onDismissReview
+}: Props) {
   const phase = todayVisitPhase(booking.status);
-  const ink = todayVisitBg(phase);
+  const fallback = phase === 'started' ? '#0F9D8F' : phase === 'completed' ? '#2D2A6D' : '#F1A900';
   const serviceLine = todayVisitServiceLabel(booking);
   const timeLabel = formatTime(booking.startsAt);
   const showPin = todayVisitShowsPin(booking.status) && Boolean(booking.verifyPin);
@@ -41,18 +53,30 @@ export function TodayVisitHero({ booking, height = TILE_H, onStartReview, onDism
         : `${todayVisitTitle(booking.status)}, ${timeLabel}, ${booking.shop.name}`;
 
   return (
-    <View style={[styles.wrap, { height, backgroundColor: TILE_BG }]} accessibilityLabel={a11y}>
-      <PatternWavesSurface bgColor={TILE_BG} dotColor={ink} style={StyleSheet.absoluteFill} />
+    <Pressable
+      style={[styles.wrap, { height, backgroundColor: fallback }]}
+      onPress={onPress}
+      disabled={!onPress}
+      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityLabel={a11y}
+    >
+      <LottieView
+        source={VISIT_LOTTIE[phase]}
+        autoPlay
+        loop
+        resizeMode="cover"
+        style={StyleSheet.absoluteFill}
+      />
 
       {phase === 'completed' ? (
         <View style={styles.centerOverlay} pointerEvents="box-none">
-          <Text style={[styles.completedTitle, { color: ink }]} allowFontScaling={false}>
+          <Text style={styles.completedTitle} allowFontScaling={false}>
             Service completed!
           </Text>
-          <Text style={[styles.completedSub, { color: ink }]} allowFontScaling={false}>
+          <Text style={styles.completedSub} allowFontScaling={false}>
             Tell us how it was
           </Text>
-          <Text style={[styles.completedMeta, { color: ink }]} numberOfLines={1} allowFontScaling={false}>
+          <Text style={styles.completedMeta} numberOfLines={1} allowFontScaling={false}>
             {booking.shop.name} · {serviceLine}
           </Text>
           <View style={styles.actions} pointerEvents="box-none">
@@ -102,9 +126,15 @@ export function TodayVisitHero({ booking, height = TILE_H, onStartReview, onDism
               <View style={styles.upRule} />
               {showPin ? (
                 <View style={styles.pinBlock}>
-                  <Text style={styles.upCode} allowFontScaling={false}>
-                    {booking.verifyPin}
-                  </Text>
+                  <View style={styles.pinRow} accessibilityLabel={`Visit code ${booking.verifyPin}`}>
+                    {(booking.verifyPin || '').slice(0, 4).split('').map((digit, index) => (
+                      <View key={`${digit}-${index}`} style={styles.pinSlot}>
+                        <Text style={styles.pinDigit} allowFontScaling={false}>
+                          {digit}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
                   <Text style={styles.upHint} allowFontScaling={false}>
                     Share this when arrived at the shop
                   </Text>
@@ -125,7 +155,7 @@ export function TodayVisitHero({ booking, height = TILE_H, onStartReview, onDism
           </View>
         </View>
       )}
-    </View>
+    </Pressable>
   );
 }
 
@@ -169,7 +199,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.semibold,
     fontSize: 13,
     lineHeight: 16,
-    color: BLACK,
+    color: WHITE,
     letterSpacing: 1.2,
     textTransform: 'uppercase',
     textAlign: 'center'
@@ -179,7 +209,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold,
     fontSize: 34,
     lineHeight: 38,
-    color: BLACK,
+    color: WHITE,
     letterSpacing: -0.8,
     textAlign: 'center'
   },
@@ -188,7 +218,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.semibold,
     fontSize: 16,
     lineHeight: 20,
-    color: BLACK,
+    color: WHITE,
     textAlign: 'center'
   },
   startedMeta: {
@@ -196,7 +226,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.regular,
     fontSize: 14,
     lineHeight: 18,
-    color: BLACK,
+    color: 'rgba(255,255,255,0.88)',
     textAlign: 'center',
     maxWidth: '88%'
   },
@@ -229,7 +259,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.semibold,
     fontSize: 15,
     lineHeight: 18,
-    color: TEAL
+    color: BLACK
   },
   upTime: {
     marginTop: 8,
@@ -244,14 +274,26 @@ const styles = StyleSheet.create({
     width: 36,
     height: 3,
     borderRadius: 2,
-    backgroundColor: TEAL
+    backgroundColor: BLACK
   },
-  upCode: {
+  pinRow: {
+    flexDirection: 'row',
+    gap: 6
+  },
+  pinSlot: {
+    width: 32,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: WHITE,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  pinDigit: {
     fontFamily: fontFamily.bold,
-    fontSize: 32,
-    lineHeight: 36,
+    fontSize: 18,
+    lineHeight: 22,
     color: BLACK,
-    letterSpacing: -0.4
+    fontVariant: ['tabular-nums']
   },
   upHint: {
     marginTop: 6,
@@ -265,7 +307,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold,
     fontSize: 15,
     lineHeight: 18,
-    color: TEAL,
+    color: BLACK,
     textAlign: 'right',
     textTransform: 'uppercase'
   },
@@ -282,7 +324,7 @@ const styles = StyleSheet.create({
     fontFamily: fontFamily.bold,
     fontSize: 16,
     lineHeight: 20,
-    color: TEAL,
+    color: BLACK,
     textAlign: 'right'
   },
   pinBlock: {
@@ -314,13 +356,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(42,39,88,0.06)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     borderWidth: 1,
-    borderColor: 'rgba(42,39,88,0.35)'
+    borderColor: 'rgba(255,255,255,0.7)'
   },
   dismissBtnText: {
     fontFamily: fontFamily.semibold,
     fontSize: 14,
-    color: '#2A2758'
+    color: WHITE
   }
 });

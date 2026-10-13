@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -14,13 +14,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { DateOfBirthField } from '@/components/DateOfBirthField';
 import { PressScale } from '@/components/PressScale';
 import { fontFamily } from '@/constants/fonts';
 import { radii, spacing, type Palette } from '@/constants/theme';
-import { updateProfile } from '@/services/auth';
+import { dropExpiredSession, refreshProfile, updateProfile } from '@/services/auth';
 import { ensureLocationPermission, readCurrentPlace } from '@/services/device-location';
 import { usePlaceStore } from '@/store/usePlaceStore';
-import { useColors, useThemedStyles } from '@/store/useThemeStore';
+import { customerProfileReady, useSessionStore } from '@/store/useSessionStore';
+import { assertDateOfBirth } from '@/utils/dateOfBirth';
+import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
 
 const GENDERS = [
   { id: 'male', label: 'Male' },
@@ -31,16 +34,46 @@ const GENDERS = [
 
 export default function CompleteProfile() {
   const colors = useColors();
+  const dark = useThemeStore((state) => state.dark);
   const styles = useThemedStyles(formStyles);
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [gender, setGender] = useState<(typeof GENDERS)[number]['id'] | ''>('');
+  const savedName = useSessionStore((state) => state.name) || '';
+  const savedGender = useSessionStore((state) => state.gender) || '';
+  const [name, setName] = useState(savedName);
+  const [gender, setGender] = useState<(typeof GENDERS)[number]['id'] | ''>(
+    GENDERS.some((g) => g.id === savedGender) ? (savedGender as (typeof GENDERS)[number]['id']) : ''
+  );
+  const [dob, setDob] = useState('');
   const [invite, setInvite] = useState('');
   const [genderOpen, setGenderOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const genderLabel = GENDERS.find((g) => g.id === gender)?.label || 'Select gender';
+
+  useEffect(() => {
+    let live = true;
+    void refreshProfile().then((result) => {
+      if (!live) return;
+      if (result === 'unauthorized') {
+        dropExpiredSession();
+        router.replace('/auth');
+        return;
+      }
+      const session = useSessionStore.getState();
+      if (customerProfileReady(session)) {
+        router.replace('/(tabs)');
+        return;
+      }
+      if (session.name?.trim()) setName(session.name);
+      if (GENDERS.some((g) => g.id === session.gender)) {
+        setGender(session.gender as (typeof GENDERS)[number]['id']);
+      }
+      if (session.dateOfBirth) setDob(session.dateOfBirth);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const finish = useCallback(async () => {
     if (!name.trim()) {
@@ -51,14 +84,24 @@ export default function CompleteProfile() {
       setError('Pick a gender.');
       return;
     }
+    if (!dob) {
+      setError('Pick your date of birth.');
+      return;
+    }
+    try {
+      assertDateOfBirth(dob);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Pick your date of birth.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       await updateProfile({
         name: name.trim(),
-        email: email.trim() || undefined,
         gender,
-        inviteCode: invite.trim() || undefined
+        dateOfBirth: dob,
+        ...(invite.trim() ? { inviteCode: invite.trim() } : {})
       });
       const allowed = await ensureLocationPermission();
       if (allowed) {
@@ -73,21 +116,27 @@ export default function CompleteProfile() {
       }
       router.replace('/(tabs)');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save.');
+      const message = err instanceof Error ? err.message : 'Could not save.';
+      if (message === 'Sign in again.') {
+        dropExpiredSession();
+        router.replace('/auth');
+        return;
+      }
+      setError(message);
     } finally {
       setBusy(false);
     }
-  }, [email, gender, invite, name]);
+  }, [dob, gender, invite, name]);
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar style="dark" />
+      <StatusBar style={dark ? 'light' : 'dark'} />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>Create your account</Text>
           <Text style={styles.sub}>A few details so shops know who is arriving.</Text>
 
-          <Field label="Name" styles={styles}>
+          <Field label="Full name" styles={styles}>
             <TextInput
               style={styles.input}
               value={name}
@@ -98,19 +147,6 @@ export default function CompleteProfile() {
             />
           </Field>
 
-          <Field label="Email" styles={styles}>
-            <TextInput
-              style={styles.input}
-              value={email}
-              onChangeText={setEmail}
-              placeholder="you@email.com"
-              placeholderTextColor={colors.muted}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          </Field>
-
           <Field label="Gender" styles={styles}>
             <PressScale style={styles.select} onPress={() => setGenderOpen(true)} haptic>
               <Text style={[styles.selectText, !gender && styles.placeholder]}>{genderLabel}</Text>
@@ -118,7 +154,11 @@ export default function CompleteProfile() {
             </PressScale>
           </Field>
 
-          <Field label="Invitation code (optional)" styles={styles}>
+          <Field label="Date of birth" styles={styles}>
+            <DateOfBirthField value={dob} onChange={setDob} />
+          </Field>
+
+          <Field label="Referral code (optional)" styles={styles}>
             <TextInput
               style={styles.input}
               value={invite}

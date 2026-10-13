@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import twilio from 'twilio';
 import { PrismaClient } from '@prisma/client';
+import { assertDateOfBirth } from '../../utils/dateOfBirth';
 
 const prisma = new PrismaClient();
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -14,6 +15,7 @@ export type PublicUser = {
   phone: string | null;
   name: string | null;
   gender?: string | null;
+  dateOfBirth?: string | null;
   inviteCode?: string | null;
 };
 
@@ -36,6 +38,7 @@ function publicUser(user: {
   phone: string | null;
   name: string | null;
   gender?: string | null;
+  dateOfBirth?: Date | null;
   inviteCode?: string | null;
 }): PublicUser {
   return {
@@ -44,8 +47,17 @@ function publicUser(user: {
     phone: user.phone,
     name: user.name,
     gender: user.gender ?? null,
+    dateOfBirth: dateOnly(user.dateOfBirth),
     inviteCode: user.inviteCode ?? null
   };
+}
+
+function dateOnly(value: Date | null | undefined) {
+  if (!value) return null;
+  const y = value.getUTCFullYear();
+  const m = String(value.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(value.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 export function signToken(user: PublicUser, audience: 'customer' | 'partner' = 'customer') {
@@ -90,7 +102,7 @@ export async function userFromToken(token: string) {
 
 export async function updateProfile(
   token: string,
-  input: { name?: string; phone?: string; email?: string; gender?: string; inviteCode?: string }
+  input: { name?: string; phone?: string; email?: string; gender?: string; dateOfBirth?: string; inviteCode?: string }
 ) {
   const current = await userFromToken(token);
   const data: {
@@ -98,6 +110,7 @@ export async function updateProfile(
     phone?: string;
     email?: string | null;
     gender?: string | null;
+    dateOfBirth?: Date;
     inviteCode?: string | null;
   } = {};
   if (input.name !== undefined) {
@@ -130,6 +143,10 @@ export async function updateProfile(
     const allowed = new Set(['male', 'female', 'other', 'prefer_not', '']);
     if (!allowed.has(gender)) throw new Error('Pick a gender option.');
     data.gender = gender || null;
+  }
+  if (input.dateOfBirth !== undefined) {
+    const iso = assertDateOfBirth(input.dateOfBirth);
+    data.dateOfBirth = new Date(`${iso}T00:00:00.000Z`);
   }
   if (input.inviteCode !== undefined) {
     const code = input.inviteCode.trim().slice(0, 32);
@@ -270,4 +287,27 @@ export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: s
   const user = byPhone || (await prisma.user.create({ data: { phone } }));
   const profile = publicUser(user);
   return { token: signToken(profile), user: profile };
+}
+
+/** Removes the customer login and their bookings, holds, and saved places. */
+export async function deleteCustomerAccount(token: string) {
+  const user = await userFromToken(token);
+  const bookings = await prisma.booking.findMany({ where: { userId: user.id }, select: { id: true } });
+  const ids = bookings.map((row) => row.id);
+  await prisma.$transaction(async (tx) => {
+    if (ids.length) {
+      await tx.review.deleteMany({ where: { bookingId: { in: ids } } });
+      await tx.bookingPayment.deleteMany({ where: { bookingId: { in: ids } } });
+      await tx.bookingService.deleteMany({ where: { bookingId: { in: ids } } });
+      await tx.booking.deleteMany({ where: { id: { in: ids } } });
+    }
+    await tx.review.deleteMany({ where: { userId: user.id } });
+    await tx.bookingHold.deleteMany({ where: { userId: user.id } });
+    await tx.notification.deleteMany({ where: { userId: user.id } });
+    await tx.favouriteShop.deleteMany({ where: { userId: user.id } });
+    await tx.savedLocation.deleteMany({ where: { userId: user.id } });
+    if (user.phone) await tx.phoneOtp.deleteMany({ where: { phone: user.phone } });
+    await tx.user.delete({ where: { id: user.id } });
+  });
+  return { deleted: true as const };
 }

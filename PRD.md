@@ -20,7 +20,7 @@ Same email may exist in both tables. JWT `aud` is `customer` | `partner` so toke
 ## Customer outcomes
 
 1. After Get Started, land on customer sign-in (phone / email / Google). Footer: **Become a partner** (opens website) and **Already a partner** (partner sign-in).
-2. Sign in (email/password, phone OTP, Google where native build allows). OTP can attach phone to an already signed-in email/Google account.
+2. Sign in (email/password, phone OTP, Google where native build allows). OTP can attach phone to an already signed-in email/Google account. First time (and any account still missing name, gender, or date of birth) stops on **complete profile**: full name, gender, native date of birth (13+), optional referral code. Later sign-ins skip it. Partner sign-in does not use this screen.
 3. Set location (GPS, search, saved places). Default area if GPS missing: **23.2324, 87.8615** — user must **confirm** (or change pin) before Home/Explore list loads. If a **saved** pin is far from current GPS, prompt keep vs switch.
 4. See **nearby shops** that finished partner setup (`setupDone`). Sort by **distance (km)** / earliest slot / price — not drive-time ETA.
 5. Open shop (Luzo-style detail) → **Services** category tiles → **menu** screen (side category rail + accordion groups) → **multi-select services** → **Go to cart** → staff → slot → **Book appointment** → bottom sheet **Pay at shop** or **Pay from app** (30% Razorpay when enabled; currently off) → 8‑minute hold starts on pay choice → awaiting shop → partner Accept. Package = one continuous time block (sum durations, one buffer at end). One customer cannot hold overlapping active tickets. Category tile photos + richer About/Gallery copy = placeholders until partner assets.

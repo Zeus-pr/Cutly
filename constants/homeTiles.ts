@@ -16,8 +16,6 @@ export type HomeServiceTile = {
   tint: string;
   /** Optional illustration — set when you provide an SVG/PNG under assets/home-tiles. */
   image?: ImageSourcePropType;
-  /** Nudge art further into the corner (negative = more clipped off edge). */
-  imageOffset?: { right?: number; bottom?: number };
 };
 
 /**
@@ -27,57 +25,53 @@ export type HomeServiceTile = {
 export const HOME_SERVICE_TILES: HomeServiceTile[] = [
   {
     id: 'salon',
-    title: 'SALON',
-    subtitle: 'Style and care',
+    title: 'Salon',
+    subtitle: 'Cut, colour, finish',
     serviceName: 'Haircut',
     icon: 'cut-outline',
     tint: '#F06B55',
-    image: require('@/assets/home-tiles/salon.png')
+    image: require('@/assets/home-photos/hair.jpg')
   },
   {
     id: 'wellness',
-    title: 'WELLNESS\n& SPA',
-    subtitle: 'Sit back and relax',
+    title: 'Wellness',
+    subtitle: 'Face, body, quiet',
     serviceName: 'Facial',
     icon: 'leaf-outline',
     tint: '#2F6F4E',
-    image: require('@/assets/home-tiles/wellness.png'),
-    imageOffset: { right: -28, bottom: -8 }
+    image: require('@/assets/home-photos/wellness.jpg')
   },
   {
     id: 'nails',
-    title: 'NAILS & LASHES',
-    subtitle: 'You deserve\nto be\npampered',
+    title: 'Nails',
+    subtitle: 'Hands and lashes',
     serviceName: 'Manicure',
     icon: 'sparkles-outline',
     tint: '#D45540',
-    image: require('@/assets/home-tiles/nails.png'),
-    imageOffset: { right: -36, bottom: -10 }
+    image: require('@/assets/home-photos/nails.jpg')
   },
   {
     id: 'tattoo',
-    title: 'TATTOO STUDIO',
-    subtitle: 'Wear your story',
+    title: 'Tattoo',
+    subtitle: 'Flash and custom',
     serviceName: 'Flash / small tattoo',
     icon: 'brush-outline',
     tint: '#17263C',
-    image: require('@/assets/home-tiles/tattoo.png'),
-    imageOffset: { right: -14, bottom: -6 }
+    image: require('@/assets/home-photos/tattoo.jpg')
   },
   {
     id: 'piercing',
-    title: 'PIERCING STUDIO',
-    subtitle: 'Feeling funky?',
+    title: 'Piercing',
+    subtitle: 'Lobe to cartilage',
     serviceName: 'Ear lobe',
     icon: 'ellipse-outline',
     tint: '#C48A12',
-    image: require('@/assets/home-tiles/piercing.png'),
-    imageOffset: { right: -12, bottom: -4 }
+    image: require('@/assets/home-photos/piercing.jpg')
   },
   {
     id: 'all',
-    title: 'MORE',
-    subtitle: 'View all',
+    title: 'More',
+    subtitle: 'The rest of the menu',
     serviceName: null,
     icon: 'add',
     tint: '#F06B55'

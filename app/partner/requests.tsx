@@ -167,11 +167,10 @@ function RequestCard({
       </Text>
       <Text style={styles.when}>{formatDateTime(item.startsAt)}</Text>
       <Text style={styles.code}>
-        {item.bookingCode} · {formatINR(item.advancePaise)} advance
+        {item.bookingCode} · {formatINR(item.totalPaise || 0)} at shop
       </Text>
       <Text style={styles.policy}>
-        Reject → advance refunded to customer. Accept → they show a visit code on Floor. Customer cancel ≥12h before
-        start also refunds; within 12h shop keeps the advance.
+        Reject frees the slot. Accept → they show a visit code on Floor. Customer can cancel until 12 hours before the visit.
       </Text>
       <View style={styles.sliders}>
         <SlideToAction

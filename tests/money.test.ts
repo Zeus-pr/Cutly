@@ -1,35 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  advancePaiseFromTotal,
   archivedIdempotencyKey,
   bookingIdempotencyKey,
   bindClientIdempotencyKey
 } from '../backend/src/money';
-import { advanceFor } from '../utils/money';
 import { bookingIntentKey } from '../utils/idempotency';
-
-describe('advance amount (CJ-02)', () => {
-  it('matches client and server formulas', () => {
-    for (const total of [0, 100, 333, 35000, 99999]) {
-      expect(advanceFor(total)).toBe(advancePaiseFromTotal(total));
-    }
-  });
-
-  it('uses round (not ceil) so ₹350 → ₹105', () => {
-    expect(advancePaiseFromTotal(35000)).toBe(10500);
-    expect(advanceFor(35000)).toBe(10500);
-    // ceil would have been 10500 too for this case; pick a drift case:
-    expect(advancePaiseFromTotal(100)).toBe(30);
-    expect(Math.ceil(100 * 0.3)).toBe(30);
-    expect(advancePaiseFromTotal(10)).toBe(3);
-    expect(Math.ceil(10 * 0.3)).toBe(3);
-    // classic drift: 1 paise * 0.3
-    expect(Math.round(1 * 0.3)).toBe(0);
-    expect(Math.ceil(1 * 0.3)).toBe(1);
-    expect(advancePaiseFromTotal(1)).toBe(0);
-    expect(advanceFor(1)).toBe(0);
-  });
-});
 
 describe('booking idempotency (CJ-12 / CJ-13)', () => {
   it('includes service and barber', () => {

@@ -10,6 +10,8 @@ type SessionState = {
   name: string | null;
   /** male | female | other | prefer_not — from /auth/me. */
   gender: string | null;
+  /** YYYY-MM-DD from the native date picker. */
+  dateOfBirth: string | null;
   city: string;
   introDone: boolean;
   /** Session-only: PatternWaves launch → Get Started tapped. */
@@ -28,6 +30,7 @@ type SessionState = {
     email?: string | null;
     name?: string | null;
     gender?: string | null;
+    dateOfBirth?: string | null;
   }) => void;
   setCity: (city: string) => void;
   passIntro: () => void;
@@ -41,6 +44,7 @@ const phoneKey = 'cutly.phone';
 const emailKey = 'cutly.email';
 const nameKey = 'cutly.name';
 const genderKey = 'cutly.gender';
+const dateOfBirthKey = 'cutly.dateOfBirth';
 const cityKey = 'cutly.city';
 const audienceKey = 'cutly.audience';
 const partnerTokenKey = 'cutly.partnerToken';
@@ -52,12 +56,22 @@ export function givenName(name: string | null | undefined) {
   return name?.trim().split(/\s+/)[0] || '';
 }
 
+/** Home is allowed only after name, gender, and a date of birth. */
+export function customerProfileReady(profile: {
+  name?: string | null;
+  gender?: string | null;
+  dateOfBirth?: string | null;
+}) {
+  return Boolean(profile.name?.trim() && profile.gender?.trim() && profile.dateOfBirth);
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   accessToken: null,
   phone: null,
   email: null,
   name: null,
   gender: null,
+  dateOfBirth: null,
   city: 'Burdwan',
   introDone: false,
   launchDone: false,
@@ -78,13 +92,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       phone: profile.phone === undefined ? get().phone : profile.phone,
       email: profile.email === undefined ? get().email : profile.email,
       name: profile.name === undefined ? get().name : profile.name,
-      gender: profile.gender === undefined ? get().gender : profile.gender
+      gender: profile.gender === undefined ? get().gender : profile.gender,
+      dateOfBirth: profile.dateOfBirth === undefined ? get().dateOfBirth : profile.dateOfBirth
     };
     set(next);
     void SecureStore.setItemAsync(phoneKey, next.phone || '');
     void SecureStore.setItemAsync(emailKey, next.email || '');
     void SecureStore.setItemAsync(nameKey, next.name || '');
     void SecureStore.setItemAsync(genderKey, next.gender || '');
+    void SecureStore.setItemAsync(dateOfBirthKey, next.dateOfBirth || '');
   },
   setCity: (city) => {
     const next = city.trim() || 'Burdwan';
@@ -117,9 +133,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   passLaunch: () => set({ launchDone: true }),
   hydrate: async () => {
     // Fast path — only what SessionGate needs to reach home (cuts cold-start SecureStore waits).
-    const [accessToken, name, partnerToken, partnerName, setup] = await Promise.all([
+    const [accessToken, name, gender, dateOfBirth, partnerToken, partnerName, setup] = await Promise.all([
       SecureStore.getItemAsync(tokenKey),
       SecureStore.getItemAsync(nameKey),
+      SecureStore.getItemAsync(genderKey),
+      SecureStore.getItemAsync(dateOfBirthKey),
       SecureStore.getItemAsync(partnerTokenKey),
       SecureStore.getItemAsync(partnerNameKey),
       SecureStore.getItemAsync(setupKey)
@@ -129,6 +147,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({
       accessToken,
       name: (partnerSession ? partnerName : name) || null,
+      gender: partnerSession ? null : gender || null,
+      dateOfBirth: partnerSession || !/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth || '') ? null : dateOfBirth,
       audience: nextAudience,
       partnerToken,
       setupDone: partnerSession && setup === '1',
@@ -144,26 +164,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       SecureStore.getItemAsync(phoneKey),
       SecureStore.getItemAsync(emailKey),
       SecureStore.getItemAsync(cityKey),
-      SecureStore.getItemAsync(partnerEmailKey),
-      SecureStore.getItemAsync(genderKey)
-    ]).then(([phone, email, city, partnerEmail, gender]) => {
+      SecureStore.getItemAsync(partnerEmailKey)
+    ]).then(([phone, email, city, partnerEmail]) => {
       const cur = get();
       const partner = Boolean(cur.partnerToken);
       set({
         phone: phone || null,
         email: (partner ? partnerEmail : email) || null,
-        gender: gender || null,
         city: city || cur.city || 'Burdwan'
       });
     });
   },
   clear: () => {
-    set({ accessToken: null, phone: null, email: null, name: null, gender: null, introDone: false, launchDone: false, audience: null });
+    set({
+      accessToken: null,
+      phone: null,
+      email: null,
+      name: null,
+      gender: null,
+      dateOfBirth: null,
+      introDone: false,
+      launchDone: false,
+      audience: null
+    });
     void SecureStore.deleteItemAsync(tokenKey);
     void SecureStore.deleteItemAsync(phoneKey);
     void SecureStore.deleteItemAsync(emailKey);
     void SecureStore.deleteItemAsync(nameKey);
     void SecureStore.deleteItemAsync(genderKey);
+    void SecureStore.deleteItemAsync(dateOfBirthKey);
+    void SecureStore.deleteItemAsync('cutly.birthYear');
     void SecureStore.deleteItemAsync(audienceKey);
   }
 }));

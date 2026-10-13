@@ -1,9 +1,3 @@
-/** 30% advance in paise — server is source of truth (CJ-02). */
-export function advancePaiseFromTotal(totalPaise: number): number {
-  if (!Number.isFinite(totalPaise) || totalPaise <= 0) return 0;
-  return Math.round(totalPaise * 0.3);
-}
-
 /** Stable booking idempotency key (CJ-12). `serviceIdsKey` = sorted ids joined by `+`. */
 export function bookingIdempotencyKey(input: {
   userId: string;

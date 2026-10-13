@@ -41,7 +41,7 @@ function checkoutHtml(input: {
 </head>
 <body>
   <div class="badge">RAZORPAY TEST MODE</div>
-  <h2>CUTLY advance</h2>
+  <h2>CUTLY payment</h2>
   <p>No real money is charged. Use Razorpay test cards / UPI in the checkout sheet.</p>
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
   <script>
@@ -107,7 +107,7 @@ export default function RazorpayPay() {
     keyId: params.keyId || '',
     orderId: params.orderId || '',
     amountPaise: Number(params.amountPaise || 0),
-    description: params.description || 'CUTLY test advance',
+    description: params.description || 'CUTLY payment',
     shopName: params.shopName || 'CUTLY'
   });
 

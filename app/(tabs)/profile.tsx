@@ -20,7 +20,8 @@ import { PrimaryButton } from '@/components/PrimaryButton';
 import { ScreenBack } from '@/components/ScreenBack';
 import { fontFamily } from '@/constants/fonts';
 import { radii, spacing, type Palette } from '@/constants/theme';
-import { updateProfile } from '@/services/auth';
+import { deleteAccount, updateProfile } from '@/services/auth';
+import { appAlert, appConfirm } from '@/store/useDialogStore';
 import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
 import { useSessionStore } from '@/store/useSessionStore';
 
@@ -59,6 +60,7 @@ export default function Profile() {
   const [draftGender, setDraftGender] = useState<GenderId | ''>((gender as GenderId) || '');
   const [genderOpen, setGenderOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   function openEdit() {
@@ -93,6 +95,34 @@ export default function Profile() {
     }
   }
 
+  function confirmDelete() {
+    if (deleting) return;
+    appConfirm({
+      title: 'Delete account?',
+      message: 'This removes your login, bookings, and saved places. This cannot be undone.',
+      cancelLabel: 'Cancel',
+      confirmLabel: 'Delete account',
+      destructive: true,
+      onConfirm: () => {
+        void removeAccount();
+      }
+    });
+  }
+
+  async function removeAccount() {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await deleteAccount();
+      useSessionStore.getState().clear();
+      router.replace('/welcome');
+    } catch (err) {
+      appAlert('Could not delete', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function shareApp() {
     try {
       await Share.share({
@@ -120,9 +150,15 @@ export default function Profile() {
       icon: 'logo-whatsapp',
       onPress: () => void Linking.openURL('https://wa.me/919000000000')
     },
-    { label: "FAQ's", icon: 'information-circle-outline' },
-    { label: 'Terms & Conditions', icon: 'document-text-outline' },
-    { label: 'Privacy Policy', icon: 'shield-checkmark-outline' },
+    { label: "FAQ's", icon: 'information-circle-outline', onPress: () => router.push('/legal/faq') },
+    { label: 'Terms & Conditions', icon: 'document-text-outline', onPress: () => router.push('/legal/terms') },
+    { label: 'Privacy Policy', icon: 'shield-checkmark-outline', onPress: () => router.push('/legal/privacy') },
+    {
+      label: 'Delete account',
+      icon: 'trash-outline',
+      danger: true,
+      onPress: confirmDelete
+    },
     {
       label: 'Logout',
       icon: 'log-out-outline',

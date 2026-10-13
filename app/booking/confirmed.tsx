@@ -44,9 +44,6 @@ export default function Confirmed() {
             ? `${p.shopName} must accept before your slot starts. We’ll notify you if it’s confirmed, rejected, or missed.`
             : `Your time is booked at ${p.shopName}.`}
         </Text>
-        {testMode ? (
-          <Text style={styles.testNote}>Razorpay test mode — advance was not a real charge.</Text>
-        ) : null}
         <View style={styles.card}>
           <Text style={styles.date}>{formatDateLong(p.startsAt)}</Text>
           <Text style={styles.time}>{formatTime(p.startsAt)}</Text>
@@ -54,8 +51,7 @@ export default function Confirmed() {
             {p.serviceName} · {p.barberName}
           </Text>
           <Text style={styles.line}>
-            {formatINR(Number(p.advance))} {testMode ? 'test advance' : 'paid'} ·{' '}
-            {formatINR(Number(p.total) - Number(p.advance))} at shop
+            {formatINR(Number(p.total))} at the shop
           </Text>
         </View>
         <View style={styles.spacer} />

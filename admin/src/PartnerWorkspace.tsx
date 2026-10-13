@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   amenities as AMENITY_OPTIONS,
   catalogue,
@@ -8,6 +8,7 @@ import {
 } from '@catalogue';
 import { PartnerMenuCatalogue } from './Catalogue';
 import { adminFetch, partnerFetch, type HourDay, type PartnerShop } from './api';
+import { PhotoCrop, type CropKind } from './PhotoCrop';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -513,16 +514,34 @@ function PhotosForm({
   onSaved: () => Promise<void>;
 }) {
   const [photos, setPhotos] = useState<string[]>(shop.photos || []);
+  const [pending, setPending] = useState<{ file: File; kind: CropKind } | null>(null);
+  const resolver = useRef<((url: string | null) => void) | null>(null);
+
+  function askCrop(file: File, kind: CropKind) {
+    return new Promise<string | null>((resolve) => {
+      resolver.current = resolve;
+      setPending({ file, kind });
+    });
+  }
+
+  function finishCrop(url: string | null) {
+    resolver.current?.(url);
+    resolver.current = null;
+    setPending(null);
+  }
 
   async function onFiles(files: FileList | null) {
     if (!files?.length) return;
-    const next = [...photos];
+    const added: string[] = [];
+    let count = photos.length;
     for (const file of Array.from(files)) {
-      if (next.length >= 5) break;
-      const dataUrl = await readFileAsDataUrl(file);
-      next.push(dataUrl);
+      if (count >= 5) break;
+      const dataUrl = await askCrop(file, count === 0 ? 'hero' : 'gallery');
+      if (!dataUrl) break;
+      added.push(dataUrl);
+      count += 1;
     }
-    setPhotos(next.slice(0, 5));
+    if (added.length) setPhotos((prev) => [...prev, ...added].slice(0, 5));
   }
 
   async function save() {
@@ -545,14 +564,15 @@ function PhotosForm({
     <div className="card">
       <h2>Photos</h2>
       <p className="hint">
-        <code>PATCH /partner/photos</code> — up to 5 images as data URLs (current app storage). Object storage later
-        (PS-06).
+        The first photo is the shop header. The next ones are gallery cards. Drag each photo into the matching frame,
+        then save. Up to 5. If you remove the header, the next photo becomes the header.
       </p>
       <div className="photos">
         {photos.map((url, i) => (
-          <div className="photo-wrap" key={`${i}-${url.slice(0, 24)}`}>
-            <img className="photo" src={url} alt={`Shop ${i + 1}`} />
-            <button type="button" onClick={() => setPhotos((prev) => prev.filter((_, j) => j !== i))} aria-label="Remove">
+          <div className={`photo-wrap ${i === 0 ? 'photo-cover' : 'photo-card'}`} key={`${i}-${url.slice(0, 24)}`}>
+            <img className="photo" src={url} alt={i === 0 ? 'Shop header' : `Gallery ${i}`} />
+            {i === 0 ? <span className="photo-tag">Header</span> : null}
+            <button type="button" onClick={() => setPhotos((prev) => prev.filter((_, j) => j !== i))} aria-label="Remove photo">
               ×
             </button>
           </div>
@@ -563,13 +583,24 @@ function PhotosForm({
           type="file"
           accept="image/*"
           multiple
-          onChange={(e) => void onFiles(e.target.files)}
-          disabled={photos.length >= 5}
+          onChange={(e) => {
+            void onFiles(e.target.files);
+            e.target.value = '';
+          }}
+          disabled={photos.length >= 5 || pending != null}
         />
-        <button type="button" className="btn teal" disabled={busy} onClick={() => void save()}>
+        <button type="button" className="btn teal" disabled={busy || pending != null} onClick={() => void save()}>
           {busy ? 'Saving…' : 'Save photos'}
         </button>
       </div>
+      {pending ? (
+        <PhotoCrop
+          file={pending.file}
+          kind={pending.kind}
+          onCancel={() => finishCrop(null)}
+          onDone={(url) => finishCrop(url)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -681,13 +712,4 @@ function PasswordForm({
       </div>
     </div>
   );
-}
-
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error('Could not read image'));
-    reader.readAsDataURL(file);
-  });
 }

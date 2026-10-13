@@ -369,10 +369,7 @@ export default function PartnerFloor() {
                 {kind === 'booking' && due > 0 ? (
                   <View style={styles.dueChip}>
                     <Text style={styles.dueChipText}>
-                      Due {formatINR(due)}
-                      {(visit.collectedPaise || 0) > 0
-                        ? ` · advance ${formatINR(visit.collectedPaise || 0)}`
-                        : ' · pay at shop'}
+                      Due {formatINR(due)} · pay at shop
                     </Text>
                   </View>
                 ) : null}

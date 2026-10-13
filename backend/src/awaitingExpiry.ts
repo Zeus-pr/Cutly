@@ -64,7 +64,7 @@ export async function expireMissedAwaitingBookings(filter: ExpireFilter = {}) {
     });
     void notifyUser(row.userId, {
       title: 'Booking not confirmed',
-      body: `${row.shop.name} did not confirm before ${when} · advance refunded (test)`,
+      body: `${row.shop.name} did not confirm before ${when}`,
       data: { bookingId: row.id, screen: 'booking' }
     });
   }

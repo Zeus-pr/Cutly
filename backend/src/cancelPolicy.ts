@@ -17,11 +17,11 @@ export function cancelPolicy(startsAt: Date, now = new Date()): CancelPolicy {
   const refundAdvance = hoursUntilStart >= REFUND_HOURS;
   let refundLabel = 'This visit has already started.';
   if (canModify && refundAdvance) {
-    refundLabel = `Full advance refund (cancel at least ${REFUND_HOURS}h before).`;
+    refundLabel = `Cancel free at least ${REFUND_HOURS}h before the visit. Pay the bill at the shop.`;
   } else if (canModify && hoursUntilStart < LATE_HOURS) {
-    refundLabel = `Under ${LATE_HOURS}h left — shop keeps the advance.`;
+    refundLabel = `Under ${LATE_HOURS}h left — the shop may keep this booking.`;
   } else if (canModify) {
-    refundLabel = `Within ${REFUND_HOURS}h of the visit — shop keeps the advance.`;
+    refundLabel = `Within ${REFUND_HOURS}h of the visit — ask the shop before cancelling.`;
   }
   return { canModify, refundAdvance, hoursUntilStart, refundLabel };
 }

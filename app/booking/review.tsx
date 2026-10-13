@@ -12,7 +12,7 @@ import { notifyAwaitingShop, registerForPushNotifications } from '@/services/not
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
 import { formatHoldCountdown, holdSecondsLeft } from '@/utils/hold';
 import { bookingIntentKey } from '@/utils/idempotency';
-import { advanceFor, formatINR } from '@/utils/money';
+import { formatINR } from '@/utils/money';
 import { formatDate, formatTime } from '@/utils/time';
 
 export default function ReviewBooking() {
@@ -66,7 +66,6 @@ export default function ReviewBooking() {
   }, [holdExpiresAt]);
 
   if (!shop || !service) return null;
-  const advance = advanceFor(service.pricePaise);
   const holdActive = Boolean(holdId && holdExpiresAt);
   const holdExpired = holdActive && secondsLeft <= 0;
 
@@ -128,8 +127,7 @@ export default function ReviewBooking() {
             serviceName: service.name,
             barberName: barber?.name || 'Staff',
             startsAt: booking.startsAt,
-            total: String(booking.totalPaise),
-            advance: String(booking.advancePaise)
+            total: String(booking.totalPaise)
           }
         });
         setWorking(false);
@@ -161,7 +159,7 @@ export default function ReviewBooking() {
         <Text style={styles.title}>{isReschedule ? 'Confirm new time.' : 'Almost there.'}</Text>
         <Text style={styles.sub}>
           {isReschedule
-            ? 'Your advance stays on this booking — no second payment.'
+            ? 'The shop will need to accept the new time.'
             : paymentsOn
               ? 'Review the visit, then tap Pay now to hold this time for 8 minutes and check out.'
               : 'Review the visit, then tap Pay now to hold this time for 8 minutes and send the request.'}
@@ -205,18 +203,9 @@ export default function ReviewBooking() {
         </View>
         {!isReschedule ? (
           <View style={styles.card}>
-            <Row label="Service total" value={formatINR(service.pricePaise)} />
-            <Row
-              label={paymentsOn ? 'Pay today (30%)' : 'Advance (later)'}
-              value={formatINR(advance)}
-              strong
-            />
-            <Row label="Pay at shop" value={formatINR(service.pricePaise - advance)} />
-            <Text style={styles.note}>
-              {paymentsOn
-                ? 'Your advance is adjusted against the service total. Checkout uses Razorpay test keys — not a live capture.'
-                : 'Checkout is off. Shop will confirm the visit; settle payment at the shop.'}
-            </Text>
+            <Row label="Service total" value={formatINR(service.pricePaise)} strong />
+            <Row label="Pay at shop" value={formatINR(service.pricePaise)} />
+            <Text style={styles.note}>Shop will confirm the visit. Pay the full bill at the shop.</Text>
           </View>
         ) : null}
       </ScrollView>

@@ -120,7 +120,7 @@ export default function PartnerHistory() {
                 </Text>
                 <Text style={styles.when}>{formatDateTime(item.startsAt)}</Text>
                 <Text style={styles.code}>
-                  {item.bookingCode} · {formatINR(item.advancePaise)} advance
+                  {item.bookingCode} · {formatINR(item.totalPaise || item.advancePaise)}
                   {item.paymentStatus === 'REFUNDED' ? ' · refunded' : ''}
                 </Text>
               </View>

@@ -22,6 +22,8 @@ export type Shop = {
   priceFromPaise: number;
   nextAvailableAt: string | null;
   services: string[];
+  /** Live menu lines with shop prices. Home rails use the minimum for the matching service. */
+  menu?: { name: string; pricePaise: number }[];
   tags: string[];
   /** Full amenity list (shop detail About). */
   amenities?: string[];

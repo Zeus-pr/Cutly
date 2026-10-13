@@ -11,7 +11,7 @@ describe('cancel policy (CJ-15)', () => {
     expect(policy.refundAdvance).toBe(true);
   });
 
-  it('keeps advance inside 12h (including under 2h)', () => {
+  it('does not refund inside 12h (including under 2h)', () => {
     const mid = cancelPolicy(start, new Date('2026-03-21T08:00:00+05:30')); // 7h
     expect(mid.refundAdvance).toBe(false);
     expect(mid.canModify).toBe(true);

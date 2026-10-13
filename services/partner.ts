@@ -69,6 +69,7 @@ export type BookingRequest = {
   service: string;
   barberName: string;
   barberId: string;
+  totalPaise: number;
   advancePaise: number;
   actions: FloorAction[];
 };

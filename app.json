@@ -10,8 +10,8 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-pattern-waves.png",
-      "resizeMode": "cover",
+      "image": "./assets/splash-blank.png",
+      "resizeMode": "contain",
       "backgroundColor": "#F06B55"
     },
     "ios": {

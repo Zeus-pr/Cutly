@@ -451,7 +451,7 @@ function screenStyles(colors: Palette) {
       borderWidth: 1,
       borderColor: colors.line
     },
-    chipOn: { backgroundColor: colors.ink, borderColor: colors.ink },
+    chipOn: { backgroundColor: colors.accent, borderColor: colors.accent },
     chipTextOn: { color: colors.white },
     audienceBlock: { gap: 6, marginTop: spacing.sm },
     chipText: { ...typography.caption, color: colors.ink, fontWeight: '700' }

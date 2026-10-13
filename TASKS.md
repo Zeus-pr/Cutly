@@ -73,6 +73,8 @@ Trackable IDs from holistic review. Canvas: open beside chat. Say **“do SEC-xx
 | **CJ-70** | [x] | Visit details header + no per-SKU minutes | Title “Visit details”; menu/cart/details show name + price only |
 | **CJ-71** | [x] | Ops global category → SKU tree | Partner **Menu** tab = category→SKU + on-shop toggle; `Service.categoryId`; shop tiles only offered cats; auto-migrate. On-shop save cap **120** (was 24 — caused “Check service name…” when enabling many standards) |
 | **CJ-72** | [P] | Grey “Booked” on unavailable slots | Parked — show taken future starts with overlay (not hide) |
+| **CJ-73** | [x] | Home service tiles + shop rails | Same title size; full-width My Visits button above search; rails from live menu. A card opens the shop menu on that section, nothing ticked. |
+| **CJ-74** | [x] | Home photos + Pay Bill sheet | Explore + promo use `assets/home-photos/`. Today’s phase card only when a visit exists. Pay Bill slides up the how-to; payment stays on the visit. |
 | **CJ-16** | [x] | No overlapping tickets per customer | Hold/book/reschedule block overlapping active tickets |
 | **CJ-18** | [x] | No-show after grace frees chair | `startsAt+5m`; `NO_SHOW` frees |
 | **CJ-19** | [x] | Real barber rows | Staff 1..N; Any assigns free staff |
@@ -82,7 +84,7 @@ Trackable IDs from holistic review. Canvas: open beside chat. Say **“do SEC-xx
 | **CJ-17** | [x] | Floor status buttons | Arrived → In service → Done / No-show |
 | **CJ-23** | [x] | Walk-in blocks timeline | `WalkIn` + Floor seat |
 | **CJ-01T** | [x] | Razorpay **test** path + labels | Built; toggled off (C1) |
-| **CJ-02** | [x] | Server advance amount | `round(total*0.3)` |
+| **CJ-02** | [x] | Server advance amount | Retired 2026-10-11 — new bookings are pay-at-shop (`advancePaise` 0). Column kept for old rows. |
 | **CJ-12** / **CJ-13** | [x] | Idempotency + retry | Intent key |
 | **CJ-24** | [x] | Bookings tab after pay/request | Query invalidate |
 | **CJ-25** | [x] | Notify shop on new **request** | Partner push on `AWAITING_SHOP` |
@@ -95,7 +97,7 @@ Trackable IDs from holistic review. Canvas: open beside chat. Say **“do SEC-xx
 | **CJ-51** | [x] | Booking details + 4-digit visit PIN | `/booking/[id]`; map → Maps; Floor start w/ PIN |
 | **CJ-52** | [x] | Timings sheet + aligned Directions | `GET /shops/:id/hours` + `ShopHoursSheet`; equal quick-row cells |
 | **CJ-53** | [x] | Slide nav: tiles / Visits / tabs | Stack `/category/[id]`, `/visits`; `TabSceneEnter`; stack `slide_from_right` |
-| **CJ-54** | [x] | Phone-first auth → OTP → profile | Splash PatternWaves → customer auth (+email/Google; Become partner / Already a partner) → CodeSlots OTP → complete-profile → location → home |
+| **CJ-54** | [x] | Phone-first auth → OTP → profile | Splash → customer auth → OTP / email / Google → complete-profile (name, gender, native date of birth 13+, optional referral) until saved → location → home |
 | **CJ-58** | [x] | Remove role gate; partner via website / sign-in | Get Started → `/auth`; Become partner → www; Already a partner → partner sign-in only (no app signup) |
 | **CJ-59** | [x] | Shop Contact dials partner phone | Shop page Contact → `tel:` `Shop.phone` (beside Get Directions) |
 | **CJ-60** | [x] | Booking + shop CTA polish | Add service via menu (dismissTo booking); slot thin font + View all >12; shop footer Book only; profile theme toggle |
@@ -108,7 +110,7 @@ Trackable IDs from holistic review. Canvas: open beside chat. Say **“do SEC-xx
 | **CJ-67** | [x] | Home today’s visit tile + booking success | Teal / gold / navy phases; poll 4s; completed → shop review + dismiss → coral; `/booking/success` then details |
 | **CJ-68** | [x] | Home visit phases live | Gold IN_SERVICE; navy COMPLETED review prompt; dismiss persisted |
 | **CJ-55** | [x] | Splash original logo + less blank coral | Clear `CutlyLogo` (+25%); Get Started font-safe |
-| **CJ-56** | [x] | PatternWaves from cold start | Prod: static `splash_pattern_waves` bridge + shared `SplashWordmark` (72%); live JS waves; same logo signed-in/out |
+| **CJ-56** | [x] | Launch Lottie (replaces PatternWaves splash) | `assets/animations/launch-splash.json` once, then Get Started. Signed-in skips it. Home promo PatternWaves stays. Rebuild APK for the white native cover. |
 | **CJ-57** | [x] | Luzo-style shop detail + menu | `/shop/[id]` tabs + category tiles; `/shop/[id]/menu` sidebar + accordions; tile photos placeholder |
 
 Partner shipped: **PS-03, PS-14, PS-15, PS-17, PS-20–PS-23, PS-25**.
@@ -183,7 +185,7 @@ Partner shipped: **PS-03, PS-14, PS-15, PS-17, PS-20–PS-23, PS-25**.
 | **PS-33** | [x] | — | Home **Open for appointments** toggle | **Close for today** (`acceptingPausedUntil` = today close IST) vs **Close temporary** (`acceptingAppointments` false); sheet X + backdrop dismiss |
 | **PS-34** | [/] | Category tabs | Accurate `Shop.kinds` + spa/nails signalling so Salons / Studios / Spas lists stay honest | Multi-select kinds + brands shipped in setup; partners must pick right types |
 | **PS-35** | [x] | CJ-52 | Public shop hours feed Timings sheet | Same `ShopWorkingHours` as partner settings; `GET /shops/:id/hours` |
-| **PS-36** | [ ] | CJ-54 | Invite / referral code redemption | Customer stores `User.inviteCode`; partner promo tooling later |
+| **PS-36** | [ ] | CJ-54 | Invite / referral code redemption | Customer stores `User.inviteCode` from complete-profile. No check or discount yet. Partner promo tooling later |
 | **PS-37** | [ ] | CJ-57 | Category tile photos + About blurb + gallery polish | Customer shop UI ready; partner upload/assign category covers + shop story later |
 | **PS-38** | [x] | — | Public **Partner With Us** lead page | Pages `cutly-www` → **https://www.cutly.buzz** + **https://cutly.buzz**; `npm run site:deploy`; api tunnel only for form |
 | **PS-39** | [x] | CJ-58 | No in-app partner signup | App = partner **sign-in** only; new shops via website lead → ops creates Partner account |
@@ -196,6 +198,7 @@ Partner shipped: **PS-03, PS-14, PS-15, PS-17, PS-20–PS-23, PS-25**.
 | **PS-46** | [ ] | CJ-64 | Offer copy for “How to avail” / bill calculator | Customer help card is placeholder; real offers need partner-defined promo + discount fields |
 | **PS-47** | [ ] | CJ-63 | Setup step: audience per catalogue service | Setup `POST /partner/shop` accepts `audience` but UI doesn’t send it yet |
 | **PS-48** | [x] | CJ-67/68 | Floor PIN start → gold “Service started”; Done → navy review tile | Customer polls bookings; partner Floor actions drive status |
+| **PS-50** | [x] | — | Cancelled visit is not “paid” | Customer details say cancelled. Partner Floor already uses `balanceSettled`, so a refund does not show Balance settled. |
 | **PS-49** | [x] | CJ-69 | Floor **Done** frees chair for Any-barber rebook | Same EXCLUDE free list as customer; no partner UI change |
 | **PS-50** | [x] | CJ-71 | Ops catalogue UI: global categories + assign SKUs | Partner edits names/price/audience; Ops moves SKUs between tiles |
 | **PS-51** | [x] | CJ-70 | Floor walk-in Staff/duration pills fill row | Match coral primary button language (equal flex pills) |
@@ -215,7 +218,9 @@ Partner shipped: **PS-03, PS-14, PS-15, PS-17, PS-20–PS-23, PS-25**.
 | **PS-12** | [/] | CJ-11 | Edit buffer / turnover minutes | **Shipped in Shop settings** (per-service buffer); catalogue defaults remain |
 | **PS-13** | [x] | CJ-15 | Partner notify + policy UI cancel/reschedule | Push already; Requests/History policy copy |
 | **PS-16** | [x] | CJ-25 | Push settings / deep-link polish | EAS projectId + `google-services.json` + FCM V1 on EAS; partner `pushToken` saves on Home |
-| **PS-18** | [/] | CJ-01T/02 | Partner ticket test advance label | When payments on |
+| **PS-18** | [x] | CJ-02 | Partner Home / Requests / History / Floor no longer show a 30% advance | Collected + Remaining stay (cash at the shop) |
+| **PS-20** | [x] | CJ-73 | Home rails follow the partner menu | A shop appears on a rail only when that service is on the shop menu. No new partner screen. |
+| **PS-52** | [x] | CJ-74 | Pay still happens on the visit | Customer Pay Bill is a how-to sheet. Partner Floor collect is unchanged. |
 | **PS-19** | [/] | CJ-35 | Service names in customer search haystack | Live `ShopService` names; custom renames flow into `query=` |
 | **PS-24** | [ ] | CJ-34/40 | Partner Home/Profile recent ratings | Customer reviews shipped |
 | **PS-25** | [x] | CJ-51 | Floor enter customer visit PIN to start | `POST …/start` + CodeSlots sheet (mock-aligned) |

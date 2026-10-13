@@ -69,6 +69,7 @@ export default function ShopServiceMenu() {
   }, [serviceIdsParam]);
 
   const [activeCat, setActiveCat] = useState(initialCat || '');
+  const appliedEntryCat = useRef(false);
   const [audience, setAudience] = useState<Audience>('all');
   const [query, setQuery] = useState('');
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
@@ -93,12 +94,14 @@ export default function ShopServiceMenu() {
 
   useEffect(() => {
     if (!grouped.length) return;
+    if (!appliedEntryCat.current && initialCat && grouped.some((g) => g.category.id === initialCat)) {
+      appliedEntryCat.current = true;
+      setActiveCat(initialCat);
+      return;
+    }
+    appliedEntryCat.current = true;
     if (activeCat && grouped.some((g) => g.category.id === activeCat)) return;
-    setActiveCat(
-      initialCat && grouped.some((g) => g.category.id === initialCat)
-        ? initialCat
-        : grouped[0].category.id
-    );
+    setActiveCat(grouped[0].category.id);
   }, [grouped, activeCat, initialCat]);
 
   // Keep cart in sync when opening from booking “Add service” with seed ids.
@@ -166,7 +169,7 @@ export default function ShopServiceMenu() {
       if (prev[first]) return prev;
       return { [first]: true };
     });
-  }, [activeCat]);
+  }, [activeCat, visibleGroups]);
 
   const selected = useMemo(
     () => serviceList.filter((s) => picked.includes(s.id)),
@@ -570,7 +573,7 @@ function menuStyles(colors: Palette) {
       borderWidth: 1.5,
       borderColor: 'transparent'
     },
-    serviceRowOn: { borderColor: colors.accent, backgroundColor: '#FFF5F2' },
+    serviceRowOn: { borderColor: colors.accent, backgroundColor: 'rgba(240,107,85,0.18)' },
     serviceName: { fontFamily: fontFamily.semibold, fontSize: 14, color: colors.ink },
     serviceMeta: { fontFamily: fontFamily.regular, fontSize: 12, color: colors.muted, marginTop: 2 },
     servicePrice: { fontFamily: fontFamily.bold, fontSize: 14, color: colors.ink },

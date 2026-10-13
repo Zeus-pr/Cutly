@@ -1,6 +1,11 @@
-import { Redirect } from 'expo-router';
+import { CategoryExploreScreen } from '@/components/CategoryExploreScreen';
+import { TabSceneEnter } from '@/components/TabSceneEnter';
 
-/** Legacy Explore tab → Salons category. */
-export default function ExploreRedirect() {
-  return <Redirect href="/(tabs)/salons" />;
+/** Discover — every nearby shop, not a single category. */
+export default function ExploreTab() {
+  return (
+    <TabSceneEnter>
+      <CategoryExploreScreen allShops />
+    </TabSceneEnter>
+  );
 }

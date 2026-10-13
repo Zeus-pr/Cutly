@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "dateOfBirth" DATE;
+ALTER TABLE "User" DROP COLUMN IF EXISTS "birthYear";

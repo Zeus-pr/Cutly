@@ -13,7 +13,7 @@ import { useSessionStore } from '@/store/useSessionStore';
 const pointers = [
   { icon: 'time-outline' as const, title: 'Real-time availability', body: 'See open slots as they happen' },
   { icon: 'storefront-outline' as const, title: 'Trusted shops', body: 'Rated shops near you' },
-  { icon: 'shield-checkmark-outline' as const, title: 'Easy & secure booking', body: 'Hold a slot and pay a small advance' }
+  { icon: 'shield-checkmark-outline' as const, title: 'Easy & secure booking', body: 'Hold a slot and pay at the shop' }
 ];
 
 export default function Welcome() {

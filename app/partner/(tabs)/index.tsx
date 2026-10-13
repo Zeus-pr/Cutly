@@ -98,7 +98,6 @@ export default function PartnerHome() {
   const staffed = shop ? Math.min(shop.today.workersPresent, shop.today.chairsInUse) : 0;
   const maxHour = useMemo(() => Math.max(1, ...(board?.byHour.map((item) => item.count) || [0])), [board?.byHour]);
   const collected = Math.round((board?.revenuePaise || 0) / 100);
-  const advance = Math.round((board?.advanceCollectedPaise || 0) / 100);
   const remaining = Math.round((board?.remainingPaise || 0) / 100);
 
   function setAccepting(next: boolean) {
@@ -255,7 +254,6 @@ export default function PartnerHome() {
         <View style={styles.grid}>
           <Metric label="Collected" value={collected ? `₹${collected}` : '₹0'} />
           <Metric label="Remaining" value={remaining ? `₹${remaining}` : '₹0'} />
-          <Metric label="Advance" value={advance ? `₹${advance}` : '₹0'} />
           <Metric label="Open seats" value={String(board?.openSlots ?? staffed)} />
         </View>
 

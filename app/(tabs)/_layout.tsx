@@ -25,8 +25,8 @@ export default function TabsLayout() {
         <Tabs.Screen name="studios" options={{ title: 'Studios' }} />
         <Tabs.Screen name="spas" options={{ title: 'Spas' }} />
         {/* Reachable from Home — not in the bottom bar */}
-        <Tabs.Screen name="bookings" options={{ href: null, title: 'Visits' }} />
-        <Tabs.Screen name="profile" options={{ href: null, title: 'Profile' }} />
+        <Tabs.Screen name="bookings" options={{ title: 'Visits' }} />
+        <Tabs.Screen name="profile" options={{ title: 'Profile' }} />
         <Tabs.Screen name="explore" options={{ href: null, title: 'Explore' }} />
       </Tabs>
       {/* Sibling overlay — must not live inside tabBar or RN paints a cream strip. */}

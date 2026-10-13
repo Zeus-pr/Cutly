@@ -22,7 +22,16 @@ import {
   autoMigrateServiceCategories
 } from './catalogueAdmin';
 import { createPartnerLead } from './partnerLeads';
-import { sendPhoneOtp, signIn, signInWithGoogle, signUp, updateProfile, userFromToken, verifyPhoneOtp } from './auth';
+import {
+  deleteCustomerAccount,
+  sendPhoneOtp,
+  signIn,
+  signInWithGoogle,
+  signUp,
+  updateProfile,
+  userFromToken,
+  verifyPhoneOtp
+} from './auth';
 import {
   collectBalanceAtShop,
   createPartnerWalkIn,
@@ -173,6 +182,11 @@ function bearer(req: express.Request) {
   const header = req.header('authorization') || '';
   return header.startsWith('Bearer ') ? header.slice(7) : '';
 }
+app.delete('/api/auth/account', (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  return handle(res, () => deleteCustomerAccount(token));
+});
 app.get('/api/auth/me', (req, res) => {
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
@@ -454,17 +468,22 @@ app.patch('/api/auth/profile', (req, res) => {
       phone: phoneSchema.optional(),
       email: z.string().trim().email().max(120).optional().or(z.literal('')),
       gender: z.enum(['male', 'female', 'other', 'prefer_not', '']).optional(),
+      dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       inviteCode: z.string().trim().max(32).optional()
     })
     .safeParse(req.body);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  if (!parsed.success) {
+    const badDate = parsed.error.issues.some((issue) => issue.path[0] === 'dateOfBirth');
+    return res.status(400).json({ error: badDate ? 'Pick your date of birth.' : 'Check your details.' });
+  }
   if (
-    !token ||
-    !parsed.success ||
-    (!parsed.data.name &&
-      !parsed.data.phone &&
-      parsed.data.email === undefined &&
-      parsed.data.gender === undefined &&
-      parsed.data.inviteCode === undefined)
+    !parsed.data.name &&
+    !parsed.data.phone &&
+    parsed.data.email === undefined &&
+    parsed.data.gender === undefined &&
+    parsed.data.dateOfBirth === undefined &&
+    parsed.data.inviteCode === undefined
   ) {
     return res.status(400).json({ error: 'Enter your name, email, or phone (+91…).' });
   }

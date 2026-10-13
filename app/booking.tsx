@@ -18,7 +18,7 @@ import { useBookingCartStore } from '@/store/useBookingCartStore';
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
 import type { AvailabilitySlot, Service } from '@/types/domain';
 import { bookingIntentKey } from '@/utils/idempotency';
-import { advanceFor, formatINR } from '@/utils/money';
+import { formatINR } from '@/utils/money';
 import { bookingDayOptions, formatDayBanner, formatTime, isFutureStart, todayKeyIST } from '@/utils/time';
 
 const SLOT_PREVIEW = 12;
@@ -58,12 +58,10 @@ export default function Booking() {
   );
   const serviceIdsKey = serviceIds.join(',');
   const isReschedule = Boolean(params.rescheduleId);
-  const paymentsOn = process.env.EXPO_PUBLIC_PAYMENTS_ENABLED === '1';
   const [barberId, setBarberId] = useState<string>();
   const [slotBarberId, setSlotBarberId] = useState<string>();
   const [date, setDate] = useState(todayKeyIST);
   const [selected, setSelected] = useState<string>();
-  const [payOpen, setPayOpen] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
   const [servicesOpen, setServicesOpen] = useState(true);
   const [slotsExpanded, setSlotsExpanded] = useState(false);
@@ -96,8 +94,6 @@ export default function Booking() {
   const totalPaise = selectedServices.reduce((sum, s) => sum + s.pricePaise, 0);
   const totalMins = selectedServices.reduce((sum, s) => sum + s.durationMinutes, 0);
   const packageLabel = selectedServices.map((s) => s.name).join(' · ') || 'Services';
-  const advance = advanceFor(totalPaise);
-
   const slots = useMemo(
     () => (slotsQ.data || []).filter((s) => s.available && isFutureStart(s.start)),
     [slotsQ.data]
@@ -140,7 +136,7 @@ export default function Booking() {
     );
   }
 
-  const bookPackage = async (payMode: 'shop' | 'app') => {
+  const bookPackage = async () => {
     if (!selected || working) return;
     const chair = barberId || slotBarberId;
     if (!chair) {
@@ -185,7 +181,7 @@ export default function Booking() {
         startsAt: selected,
         holdId: hold.id,
         idempotencyKey,
-        payMode
+        payMode: 'shop'
       });
       await queryClient.invalidateQueries({ queryKey: ['availability'] });
       if (booking.checkout) {
@@ -202,8 +198,7 @@ export default function Booking() {
             serviceName: packageLabel,
             barberName: barberQ.data?.find((b) => b.id === nextBarberId)?.name || 'Staff',
             startsAt: booking.startsAt,
-            total: String(booking.totalPaise),
-            advance: String(booking.advancePaise)
+            total: String(booking.totalPaise)
           }
         });
         return;
@@ -242,14 +237,14 @@ export default function Booking() {
     if (isReschedule) {
       appConfirm({
         title: 'Request new time?',
-        message: 'Shop will need to accept again. Your advance stays on this booking.',
+        message: 'The shop will need to accept the new time.',
         cancelLabel: 'Keep time',
         confirmLabel: 'Request',
-        onConfirm: () => void bookPackage('shop')
+        onConfirm: () => void bookPackage()
       });
       return;
     }
-    setPayOpen(true);
+    void bookPackage();
   };
 
   const removeService = (id: string) => {
@@ -557,29 +552,6 @@ export default function Booking() {
       </View>
 
       <ChoiceSheet
-        visible={payOpen}
-        title="How do you want to pay?"
-        subtitle={`Total ${formatINR(totalPaise)} · advance ${formatINR(advance)}`}
-        options={[
-          {
-            id: 'shop',
-            label: 'Pay at shop',
-            subtitle: 'Send request now — settle at the shop'
-          },
-          {
-            id: 'app',
-            label: 'Pay from app',
-            subtitle: paymentsOn
-              ? `30% advance · ${formatINR(advance)} via Razorpay`
-              : '30% advance — turning on soon',
-            disabled: !paymentsOn
-          }
-        ]}
-        onSelect={(id) => void bookPackage(id as 'shop' | 'app')}
-        onClose={() => setPayOpen(false)}
-      />
-
-      <ChoiceSheet
         visible={policyOpen}
         title="Cancellation policy"
         subtitle="Applies after the shop confirms your appointment."
@@ -589,7 +561,7 @@ export default function Booking() {
             id: 'ok',
             label: 'Got it',
             subtitle:
-              'Cancel free before the shop accepts. After confirm, cancel at least 12 hours ahead. Late cancels may forfeit advance when in-app pay is on.'
+              'Cancel free before the shop accepts. After confirm, cancel at least 12 hours ahead. Pay the bill at the shop.'
           }
         ]}
         onSelect={() => setPolicyOpen(false)}
@@ -694,7 +666,7 @@ function screenStyles(colors: Palette) {
       alignItems: 'center',
       gap: 2
     },
-    dayChipSelected: { backgroundColor: colors.ink },
+    dayChipSelected: { backgroundColor: colors.accent },
     dayWeekday: { fontFamily: fontFamily.semibold, fontSize: 11, color: colors.muted },
     dayNum: { fontFamily: fontFamily.bold, fontSize: 18, lineHeight: 22, color: colors.ink },
     dayMonth: { fontFamily: fontFamily.medium, fontSize: 11, color: colors.muted },
@@ -712,7 +684,7 @@ function screenStyles(colors: Palette) {
       borderColor: colors.line,
       backgroundColor: colors.surface
     },
-    slotSelected: { backgroundColor: colors.ink, borderColor: colors.ink },
+    slotSelected: { backgroundColor: colors.accent, borderColor: colors.accent },
     slotText: { fontFamily: fontFamily.regular, fontSize: 13, color: colors.ink },
     slotTextSelected: { color: colors.white },
     viewAllSlots: {

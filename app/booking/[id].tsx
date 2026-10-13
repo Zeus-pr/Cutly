@@ -25,6 +25,15 @@ import { useColors, useThemedStyles } from '@/store/useThemeStore';
 import { formatINR } from '@/utils/money';
 import { formatDateLong, formatTime } from '@/utils/time';
 
+function totalLine(status: string, totalPaise: number, remainingPaise: number, billSettled: boolean) {
+  const amount = `Total ${formatINR(totalPaise)}`;
+  if (status === 'CANCELLED') return `${amount} · cancelled`;
+  if (status === 'REJECTED' || status === 'EXPIRED') return `${amount} · not charged`;
+  if (status === 'NO_SHOW') return `${amount} · no-show`;
+  if (billSettled) return `${amount} · paid in full`;
+  return `${amount}${remainingPaise > 0 ? ` · pay at shop ${formatINR(remainingPaise)}` : ' · pay at shop'}`;
+}
+
 function openGoogleMapsDirections(lat: number, lng: number, label: string) {
   const q = encodeURIComponent(label || 'Shop');
   const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving&dir_action=navigate`;
@@ -64,7 +73,10 @@ export default function BookingDetails() {
   const hasCoords = Number.isFinite(lat) && Number.isFinite(lng) && lat != null && lng != null;
   const services = data?.services?.length ? data.services : data ? [data.service] : [];
   const remainingPaise = data?.remainingPaise ?? 0;
-  const billSettled = Boolean(data?.balanceSettled) || remainingPaise <= 0;
+  const inactive = Boolean(
+    data && ['CANCELLED', 'REJECTED', 'EXPIRED', 'NO_SHOW'].includes(data.status)
+  );
+  const billSettled = Boolean(data?.balanceSettled) && !inactive;
   const showPayBill =
     Boolean(data) &&
     !billSettled &&
@@ -92,8 +104,8 @@ export default function BookingDetails() {
     const policy =
       data.cancelPolicyLabel ||
       (data.refundOnCancel
-        ? 'Full advance refund (12h+ before visit).'
-        : 'Shop keeps the advance within 12h of the visit.');
+        ? 'Cancel free (12h+ before visit). Pay at the shop.'
+        : 'Inside 12 hours, ask the shop before cancelling.');
     appConfirm({
       title: 'Cancel booking?',
       message: `${data.bookingCode}\n${policy}`,
@@ -150,8 +162,8 @@ export default function BookingDetails() {
   const cancelPolicy = data
     ? data.cancelPolicyLabel ||
       (data.refundOnCancel
-        ? 'Full advance refund (12h+ before visit).'
-        : 'Shop keeps the advance within 12h of the visit.')
+        ? 'Cancel free (12h+ before visit). Pay at the shop.'
+        : 'Inside 12 hours, ask the shop before cancelling.')
     : '';
 
   const helpRows: { label: string; icon: keyof typeof Ionicons.glyphMap; onPress: () => void }[] = [
@@ -161,7 +173,7 @@ export default function BookingDetails() {
       onPress: () =>
         appAlert(
           'How to avail this offer?',
-          'Arrive at the shop on time and show your 4-digit visit code. Your advance is already counted — pay the remaining bill on CutLy or at the counter.'
+          'Arrive at the shop on time and show your 4-digit visit code. Pay the bill at the counter.'
         )
     },
     {
@@ -176,8 +188,14 @@ export default function BookingDetails() {
         data &&
         appAlert(
           'Your bill',
-          `Services total ${formatINR(data.totalPaise)}\nAdvance paid ${formatINR(data.advancePaise)}\n${
-            billSettled ? 'Nothing left to pay.' : `Balance to pay ${formatINR(remainingPaise)}`
+          `Services total ${formatINR(data.totalPaise)}\n${
+            data.status === 'CANCELLED'
+              ? 'Cancelled. Nothing was collected.'
+              : inactive
+                ? 'This visit did not go ahead.'
+                : billSettled
+                  ? 'Nothing left to pay.'
+                  : `Pay at shop ${formatINR(remainingPaise || data.totalPaise)}`
           }`
         )
     }
@@ -257,7 +275,7 @@ export default function BookingDetails() {
 
             <Text style={styles.section}>Things to remember</Text>
             <Bullet text="You can change or add services at the location (shop policy)." />
-            {!billSettled && data.status !== 'COMPLETED' ? (
+            {!billSettled && !inactive && data.status !== 'COMPLETED' ? (
               <Bullet text="Bring your visit code for a faster start." />
             ) : null}
 
@@ -323,13 +341,7 @@ export default function BookingDetails() {
             <DetailRow icon="time-outline" text={formatTime(data.startsAt)} />
             <DetailRow
               icon="pricetag-outline"
-              text={
-                billSettled
-                  ? `Total ${formatINR(data.totalPaise)} · paid in full`
-                  : `Total ${formatINR(data.totalPaise)} · advance ${formatINR(data.advancePaise)}${
-                      remainingPaise > 0 ? ` · due ${formatINR(remainingPaise)}` : ''
-                    }`
-              }
+              text={totalLine(data.status, data.totalPaise, remainingPaise, billSettled)}
             />
 
             <Text style={styles.section}>Services booked</Text>
@@ -658,7 +670,7 @@ function detailsStyles(colors: Palette) {
       backgroundColor: colors.ink,
       borderColor: colors.ink
     },
-    rescheduleText: { fontFamily: fontFamily.bold, fontSize: 15, color: colors.white },
+    rescheduleText: { fontFamily: fontFamily.bold, fontSize: 15, color: colors.canvas },
     payBtn: {
       backgroundColor: colors.accent,
       borderColor: colors.accent
