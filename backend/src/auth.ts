@@ -67,14 +67,19 @@ export function signToken(user: PublicUser, audience: 'customer' | 'partner' = '
 /** SEC-08: same message for email/phone taken — no account enumeration. */
 const SIGNUP_TAKEN = 'Could not create that account. Try another email or phone, or sign in.';
 
+export function normalEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
 export async function signUp(email: string, password: string, phone: string, name?: string) {
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const normalised = normalEmail(email);
+  const existing = await prisma.user.findUnique({ where: { email: normalised } });
   if (existing) throw new Error(SIGNUP_TAKEN);
   const phoneTaken = await prisma.user.findUnique({ where: { phone } });
   if (phoneTaken) throw new Error(SIGNUP_TAKEN);
   const user = await prisma.user.create({
     data: {
-      email,
+      email: normalised,
       phone,
       name: name || null,
       passwordHash: await bcrypt.hash(password, 10)
@@ -129,7 +134,7 @@ export async function updateProfile(
     data.phone = phone;
   }
   if (input.email !== undefined) {
-    const email = input.email.trim().toLowerCase();
+    const email = normalEmail(input.email);
     if (!email) {
       data.email = null;
     } else {
@@ -165,7 +170,7 @@ export async function updateProfileName(token: string, name: string) {
 }
 
 export async function signIn(email: string, password: string) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email: normalEmail(email) } });
   if (!user?.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
     throw new Error('Email or password is incorrect.');
   }
@@ -179,7 +184,7 @@ export async function signIn(email: string, password: string) {
  */
 export function trustedGoogleEmail(payload: { email?: string | null; email_verified?: boolean | null }) {
   if (payload.email_verified !== true) return null;
-  const email = payload.email?.trim().toLowerCase() || '';
+  const email = normalEmail(payload.email || '');
   return email || null;
 }
 
@@ -205,7 +210,7 @@ export type GoogleLinkPlan =
       reclaimFromUserId: string | null;
     }
   | { kind: 'create'; email: string | null; reclaimFromUserId: string | null }
-  | { kind: 'reject' };
+  | { kind: 'reject'; message: string };
 
 /**
  * SEC-03: link a verified Google email only to a CUTLY profile whose stored email
@@ -237,7 +242,9 @@ export function planGoogleLink(input: {
 
   if (byEmail?.emailVerified) {
     const sameGoogle = !byEmail.googleSub || byEmail.googleSub === googleSub;
-    if (!sameGoogle) return { kind: 'reject' };
+    if (!sameGoogle) {
+      return { kind: 'reject', message: 'This Google account does not match that email on CUTLY.' };
+    }
     return { kind: 'link', userId: byEmail.id, storeEmail: null, markEmailVerified: true, reclaimFromUserId: null };
   }
 
@@ -245,7 +252,12 @@ export function planGoogleLink(input: {
     return { kind: 'create', email: trustedEmail, reclaimFromUserId: reclaimTarget.id };
   }
 
-  if (other?.hasPassword) return { kind: 'create', email: null, reclaimFromUserId: null };
+  if (other?.hasPassword) {
+    return {
+      kind: 'reject',
+      message: 'You already have a CUTLY account with this email. Sign in with your password, then link Google.'
+    };
+  }
 
   return { kind: 'create', email: trustedEmail, reclaimFromUserId: null };
 }
@@ -309,7 +321,7 @@ async function finishGoogleSignIn(googleSub: string, email: string | null, name:
         }
       : null
   });
-  if (plan.kind === 'reject') throw new Error('This Google account does not match that email on CUTLY.');
+  if (plan.kind === 'reject') throw new Error(plan.message);
   const linked = plan.kind === 'link' ? (plan.userId === bySub?.id ? bySub : byEmail) : null;
   const user = await prisma.$transaction(async (tx) => {
     if (plan.reclaimFromUserId) {

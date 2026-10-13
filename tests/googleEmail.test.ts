@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { planGoogleLink, shouldClearEmailVerified, trustedGoogleEmail, type GoogleProfileHit } from '../backend/src/auth';
+import { Prisma } from '@prisma/client';
+import {
+  GoogleLinkRetry,
+  normalEmail,
+  planGoogleLink,
+  shouldClearEmailVerified,
+  shouldRetryGoogleLink,
+  trustedGoogleEmail,
+  type GoogleProfileHit
+} from '../backend/src/auth';
 
 const hit = (overrides: Partial<GoogleProfileHit> & Pick<GoogleProfileHit, 'id'>): GoogleProfileHit => ({
   email: 'guest@cutly.buzz',
@@ -22,6 +31,27 @@ describe('trustedGoogleEmail (SEC-03)', () => {
   it('drops a verified claim with no address', () => {
     expect(trustedGoogleEmail({ email: '  ', email_verified: true })).toBeNull();
     expect(trustedGoogleEmail({ email: null, email_verified: true })).toBeNull();
+  });
+});
+
+describe('normalEmail', () => {
+  it('trims and lowercases', () => {
+    expect(normalEmail('  Guest@Cutly.Buzz ')).toBe('guest@cutly.buzz');
+  });
+});
+
+describe('shouldRetryGoogleLink', () => {
+  it('retries a stale reclaim and a unique clash', () => {
+    expect(shouldRetryGoogleLink(new GoogleLinkRetry())).toBe(true);
+    expect(
+      shouldRetryGoogleLink(
+        new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+          code: 'P2002',
+          clientVersion: '0'
+        })
+      )
+    ).toBe(true);
+    expect(shouldRetryGoogleLink(new Error('Sign in again.'))).toBe(false);
   });
 });
 
@@ -56,7 +86,10 @@ describe('planGoogleLink (SEC-03)', () => {
         bySub: null,
         byEmail: hit({ id: 'password', emailVerified: false, hasPassword: true })
       })
-    ).toEqual({ kind: 'create', email: null, reclaimFromUserId: null });
+    ).toEqual({
+      kind: 'reject',
+      message: 'You already have a CUTLY account with this email. Sign in with your password, then link Google.'
+    });
   });
 
   it('moves a typed email onto the new Google profile', () => {
@@ -89,7 +122,7 @@ describe('planGoogleLink (SEC-03)', () => {
         bySub: null,
         byEmail: hit({ id: 'taken', emailVerified: true, googleSub: 'google-old' })
       })
-    ).toEqual({ kind: 'reject' });
+    ).toEqual({ kind: 'reject', message: 'This Google account does not match that email on CUTLY.' });
   });
 
   it('keeps the existing Google profile when another account is squatting the email', () => {

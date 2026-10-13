@@ -37,7 +37,7 @@ Trackable IDs from holistic review. Canvas: open beside chat. Say **“do SEC-xx
 |----|-----|--------|-------|
 | **SEC-01** | Critical | [x] | Admin loopback-only + strong secret (rotated; rejects weak default) |
 | **SEC-02** | High | [x] | `clientKey` / lead IP use `req.ip` only (no spoofable XFF) |
-| **SEC-03** | High | [x] | Google links an email only when Google verified it and the CUTLY profile’s `emailVerified` is already true. A typed address with no password is moved off that row; password accounts keep their email. A different `googleSub` on a verified profile is not replaced |
+| **SEC-03** | High | [x] | Google links an email only when Google verified it and the CUTLY profile’s `emailVerified` is already true. A typed address with no password is moved off that row. Password accounts keep their email and are told to sign in with it. Signup and password sign-in lowercase the address. A different `googleSub` on a verified profile is not replaced |
 | **SEC-04** | High | [x] | Public `/partner/signup` → 403; partner login rate-limited |
 | **SEC-05** | High | [x] | Admin: rate limit + `timingSafeEqual` + 401 |
 | **SEC-06** | High | [x] | `handle()` → `toClientError`; client +not-found / ErrorBoundary Lottie cat |
