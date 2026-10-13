@@ -79,7 +79,13 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
-          cache-dependency-path: admin/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            admin/package-lock.json
+      # admin imports ../constants/catalogue.ts, which resolves the root tsconfig (extends expo/tsconfig.base)
+      - name: Install root deps
+        run: npm ci
+        working-directory: .
       - run: npm ci
       - name: Typecheck
         run: npx tsc --noEmit -p .
