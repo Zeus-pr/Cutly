@@ -138,7 +138,7 @@ export async function updateProfile(
       if (taken) throw new Error('That email is already on another account.');
       data.email = email;
     }
-    if ((data.email ?? null) !== (current.email ?? null)) data.emailVerified = false;
+    if (shouldClearEmailVerified(current.email, data.email ?? null)) data.emailVerified = false;
   }
   if (input.gender !== undefined) {
     const gender = input.gender.trim().toLowerCase();
@@ -183,11 +183,17 @@ export function trustedGoogleEmail(payload: { email?: string | null; email_verif
   return email || null;
 }
 
+/** SEC-03: editing the address drops the Google proof. The same address keeps it. */
+export function shouldClearEmailVerified(currentEmail: string | null, nextEmail: string | null) {
+  return (nextEmail ?? null) !== (currentEmail ?? null);
+}
+
 export type GoogleProfileHit = {
   id: string;
   email: string | null;
   googleSub: string | null;
   emailVerified: boolean;
+  hasPassword: boolean;
 };
 
 export type GoogleLinkPlan =
@@ -203,8 +209,8 @@ export type GoogleLinkPlan =
 
 /**
  * SEC-03: link a verified Google email only to a CUTLY profile whose stored email
- * was itself verified. A typed address is moved off that row, and a different googleSub
- * on a verified profile is never replaced.
+ * was itself verified. A typed address with no password is moved off that row.
+ * A password account keeps its email. A different googleSub on a verified profile is never replaced.
  */
 export function planGoogleLink(input: {
   googleSub: string;
@@ -213,18 +219,19 @@ export function planGoogleLink(input: {
   byEmail: GoogleProfileHit | null;
 }): GoogleLinkPlan {
   const { googleSub, trustedEmail, bySub, byEmail } = input;
-  const unverifiedOther = byEmail && !byEmail.emailVerified && (!bySub || byEmail.id !== bySub.id) ? byEmail : null;
+  const other = byEmail && (!bySub || byEmail.id !== bySub.id) ? byEmail : null;
+  const reclaimTarget = other && !other.emailVerified && !other.hasPassword ? other : null;
 
   if (bySub) {
     const matchesStored = Boolean(trustedEmail && bySub.email === trustedEmail);
-    const fillEmpty = Boolean(trustedEmail && !bySub.email && !unverifiedOther && (!byEmail || byEmail.id === bySub.id));
-    const reclaim = Boolean(trustedEmail && !bySub.email && unverifiedOther);
+    const fillEmpty = Boolean(trustedEmail && !bySub.email && !other);
+    const reclaim = Boolean(trustedEmail && !bySub.email && reclaimTarget);
     return {
       kind: 'link',
       userId: bySub.id,
       storeEmail: fillEmpty || reclaim ? trustedEmail : null,
       markEmailVerified: matchesStored || fillEmpty || reclaim,
-      reclaimFromUserId: reclaim && unverifiedOther ? unverifiedOther.id : null
+      reclaimFromUserId: reclaim && reclaimTarget ? reclaimTarget.id : null
     };
   }
 
@@ -234,11 +241,25 @@ export function planGoogleLink(input: {
     return { kind: 'link', userId: byEmail.id, storeEmail: null, markEmailVerified: true, reclaimFromUserId: null };
   }
 
-  if (unverifiedOther && trustedEmail) {
-    return { kind: 'create', email: trustedEmail, reclaimFromUserId: unverifiedOther.id };
+  if (reclaimTarget && trustedEmail) {
+    return { kind: 'create', email: trustedEmail, reclaimFromUserId: reclaimTarget.id };
   }
 
+  if (other?.hasPassword) return { kind: 'create', email: null, reclaimFromUserId: null };
+
   return { kind: 'create', email: trustedEmail, reclaimFromUserId: null };
+}
+
+/** Stale reclaim or a unique clash: look the profiles up once more. */
+export class GoogleLinkRetry extends Error {
+  constructor() {
+    super('Google link needs another look.');
+    this.name = 'GoogleLinkRetry';
+  }
+}
+
+export function shouldRetryGoogleLink(error: unknown) {
+  return error instanceof GoogleLinkRetry || isPrismaUniqueConflict(error);
 }
 
 export function isPrismaUniqueConflict(error: unknown) {
@@ -258,7 +279,7 @@ export async function signInWithGoogle(idToken: string) {
   try {
     return await finishGoogleSignIn(googleSub, email, name);
   } catch (error) {
-    if (!isPrismaUniqueConflict(error)) throw error;
+    if (!shouldRetryGoogleLink(error)) throw error;
     return finishGoogleSignIn(googleSub, email, name);
   }
 }
@@ -270,20 +291,39 @@ async function finishGoogleSignIn(googleSub: string, email: string | null, name:
     googleSub,
     trustedEmail: email,
     bySub: bySub
-      ? { id: bySub.id, email: bySub.email, googleSub: bySub.googleSub, emailVerified: bySub.emailVerified }
+      ? {
+          id: bySub.id,
+          email: bySub.email,
+          googleSub: bySub.googleSub,
+          emailVerified: bySub.emailVerified,
+          hasPassword: Boolean(bySub.passwordHash)
+        }
       : null,
     byEmail: byEmail
-      ? { id: byEmail.id, email: byEmail.email, googleSub: byEmail.googleSub, emailVerified: byEmail.emailVerified }
+      ? {
+          id: byEmail.id,
+          email: byEmail.email,
+          googleSub: byEmail.googleSub,
+          emailVerified: byEmail.emailVerified,
+          hasPassword: Boolean(byEmail.passwordHash)
+        }
       : null
   });
   if (plan.kind === 'reject') throw new Error('This Google account does not match that email on CUTLY.');
-  const existing = bySub?.id === (plan.kind === 'link' ? plan.userId : '') ? bySub : byEmail;
+  const linked = plan.kind === 'link' ? (plan.userId === bySub?.id ? bySub : byEmail) : null;
   const user = await prisma.$transaction(async (tx) => {
     if (plan.reclaimFromUserId) {
-      await tx.user.update({
-        where: { id: plan.reclaimFromUserId },
+      if (!email) throw new GoogleLinkRetry();
+      const cleared = await tx.user.updateMany({
+        where: {
+          id: plan.reclaimFromUserId,
+          email,
+          emailVerified: false,
+          passwordHash: null
+        },
         data: { email: null, emailVerified: false }
       });
+      if (cleared.count !== 1) throw new GoogleLinkRetry();
     }
     if (plan.kind === 'create') {
       return tx.user.create({
@@ -294,7 +334,7 @@ async function finishGoogleSignIn(googleSub: string, email: string | null, name:
       where: { id: plan.userId },
       data: {
         googleSub,
-        name: existing?.name || name,
+        name: linked?.name || name,
         ...(plan.storeEmail ? { email: plan.storeEmail } : {}),
         ...(plan.markEmailVerified ? { emailVerified: true } : {})
       }

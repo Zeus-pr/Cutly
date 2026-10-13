@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { planGoogleLink, trustedGoogleEmail, type GoogleProfileHit } from '../backend/src/auth';
+import { planGoogleLink, shouldClearEmailVerified, trustedGoogleEmail, type GoogleProfileHit } from '../backend/src/auth';
 
 const hit = (overrides: Partial<GoogleProfileHit> & Pick<GoogleProfileHit, 'id'>): GoogleProfileHit => ({
   email: 'guest@cutly.buzz',
   googleSub: null,
   emailVerified: false,
+  hasPassword: false,
   ...overrides
 });
 
@@ -24,6 +25,17 @@ describe('trustedGoogleEmail (SEC-03)', () => {
   });
 });
 
+describe('shouldClearEmailVerified (SEC-03)', () => {
+  it('clears proof when the profile email changes', () => {
+    expect(shouldClearEmailVerified('guest@cutly.buzz', 'other@cutly.buzz')).toBe(true);
+    expect(shouldClearEmailVerified('guest@cutly.buzz', null)).toBe(true);
+  });
+
+  it('keeps proof when the address is unchanged', () => {
+    expect(shouldClearEmailVerified('guest@cutly.buzz', 'guest@cutly.buzz')).toBe(false);
+  });
+});
+
 describe('planGoogleLink (SEC-03)', () => {
   const googleSub = 'google-new';
   const trustedEmail = 'guest@cutly.buzz';
@@ -34,6 +46,17 @@ describe('planGoogleLink (SEC-03)', () => {
       email: trustedEmail,
       reclaimFromUserId: null
     });
+  });
+
+  it('leaves a password account’s email in place', () => {
+    expect(
+      planGoogleLink({
+        googleSub,
+        trustedEmail,
+        bySub: null,
+        byEmail: hit({ id: 'password', emailVerified: false, hasPassword: true })
+      })
+    ).toEqual({ kind: 'create', email: null, reclaimFromUserId: null });
   });
 
   it('moves a typed email onto the new Google profile', () => {
