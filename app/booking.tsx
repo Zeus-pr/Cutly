@@ -20,10 +20,11 @@ import type { AvailabilitySlot, Service } from '@/types/domain';
 import { bookingIntentKey } from '@/utils/idempotency';
 import { formatINR } from '@/utils/money';
 import { bookingDayOptions, formatDayBanner, formatTime, isFutureStart, todayKeyIST } from '@/utils/time';
+import { SUPPORT_WHATSAPP_URL } from '@/constants/support';
 
 const SLOT_PREVIEW = 12;
 
-const SUPPORT_URL = 'https://wa.me/919000000000';
+const SUPPORT_URL = SUPPORT_WHATSAPP_URL;
 
 function audienceTag(name: string): 'Men' | 'Women' | 'All' {
   if (/bridal|lash|makeup|manicure|pedicure|wax/i.test(name) && !/men|beard|shave/i.test(name)) return 'Women';
