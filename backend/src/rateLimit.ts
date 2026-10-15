@@ -1,3 +1,4 @@
+import { getClientIp, rateLimitIpKey } from './clientIp';
 import Redis from 'ioredis';
 
 type Bucket = { count: number; resetAt: number };
@@ -92,9 +93,9 @@ export async function rateLimit(key: string, limit: number, windowMs: number): P
 }
 
 /**
- * Bucket by Express `req.ip` only (respects `trust proxy`).
- * Never prefer client-supplied `X-Forwarded-For` — that bypassed rate limits.
+ * T2: bucket by getClientIp (CF-Connecting-IP only from a trusted proxy socket, else the
+ * socket peer). IPv6 is bucketed by /64. Never reads X-Forwarded-For.
  */
-export function clientKey(req: { ip?: string }, suffix: string): string {
-  return `${suffix}:${req.ip || 'unknown'}`;
+export function clientKey(req: Parameters<typeof getClientIp>[0], suffix: string): string {
+  return `${suffix}:${rateLimitIpKey(getClientIp(req))}`;
 }

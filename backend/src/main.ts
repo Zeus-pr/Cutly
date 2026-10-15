@@ -1,0 +1,37 @@
+/**
+ * API process entry. server.ts only builds the Express apps (importable by tests);
+ * this file validates config, binds both listeners and starts background sweeps.
+ * If either port cannot be bound, the whole process exits non-zero.
+ */
+import type { Server } from 'node:http';
+import { adminApp, app } from './server';
+import { paymentsEnabled } from './razorpay';
+import { startAwaitingExpirySweep } from './awaitingExpiry';
+import { resolveListenConfig } from './listenConfig';
+
+function fail(message: string, error?: unknown): never {
+  console.error(`[startup] ${message}`, error ?? '');
+  process.exit(1);
+}
+
+let cfg: ReturnType<typeof resolveListenConfig>;
+try {
+  cfg = resolveListenConfig();
+} catch (error) {
+  fail(error instanceof Error ? error.message : 'Invalid config', error);
+}
+
+function listen(server: Server, label: string) {
+  server.on('error', (error) => fail(`${label} could not listen`, error));
+}
+
+const adminServer = adminApp.listen(cfg.adminPort, cfg.adminHost, () => {
+  console.log(`CUTLY admin listening on ${cfg.adminHost}:${cfg.adminPort}`);
+  const api = app.listen(cfg.port, cfg.host, () =>
+    console.log(`CUTLY API listening on ${cfg.host}:${cfg.port} · payments=${paymentsEnabled() ? 'razorpay-test' : 'off'}`)
+  );
+  listen(api, `API ${cfg.host}:${cfg.port}`);
+  // Auto-expire missed AWAITING_SHOP while API is awake; expire-on-read covers app open.
+  startAwaitingExpirySweep(60_000);
+});
+listen(adminServer, `Admin ${cfg.adminHost}:${cfg.adminPort}`);

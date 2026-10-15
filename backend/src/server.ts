@@ -1,4 +1,9 @@
-process.loadEnvFile();
+// Tests import this module without a .env file; the process entry is backend/src/main.ts.
+try {
+  process.loadEnvFile();
+} catch {
+  // no .env: rely on the process environment
+}
 import path from 'node:path';
 import express from 'express';
 import cors from 'cors';
@@ -60,7 +65,6 @@ import {
   updateShopProfile
 } from './partner';
 import { PARTNER_FLOOR_TARGETS } from './bookingState';
-import { startAwaitingExpirySweep } from './awaitingExpiry';
 import { WALK_IN_DURATIONS } from './walkins';
 import {
   abandonBookingPayment,
@@ -92,9 +96,21 @@ import {
 } from './notifications';
 import { clientKey, rateLimit } from './rateLimit';
 import { toClientError } from './httpError';
-const app = express();
-app.set('trust proxy', 1);
-const port = Number(process.env.PORT || 4000);
+import { getClientIp, isLoopback, socketIp } from './clientIp';
+export const app = express();
+// T2: never derive req.ip from X-Forwarded-For. Use getClientIp(req) instead.
+app.set('trust proxy', false);
+app.disable('x-powered-by');
+
+/** One 404 for unknown routes and for /api/admin/* on the public listener (byte-identical). */
+function notFound(_req: express.Request, res: express.Response) {
+  res.status(404).json({ error: 'Not found.' });
+}
+/** Case-insensitive, slash-normalised match for /api/admin and below. */
+export function isAdminPath(rawPath: string) {
+  const p = rawPath.toLowerCase().replace(/\/{2,}/g, '/');
+  return /^\/api\/admin(\/|$)/.test(p);
+}
 const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:8081,http://127.0.0.1:8081,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,https://cutly.buzz,https://www.cutly.buzz')
   .split(',')
   .map((s) => s.trim())
@@ -111,6 +127,9 @@ app.use(
     }
   })
 );
+// T2-Q6: after CORS (so headers match any unknown route, Tester case 20) but before body
+// parsing and auth, so :4000 reveals nothing about admin.
+app.use((req, res, next) => (isAdminPath(req.path) ? notFound(req, res) : next()));
 app.use(express.json({ limit: '8mb' }));
 app.get('/health', (_req, res) =>
   res.json({
@@ -737,11 +756,13 @@ app.post('/api/bookings/hold', async (req, res) => {
 
 /**
  * Ops admin (SEC-01/05): loopback-only + strong ADMIN_SECRET + rate limit.
- * Admin UI talks to http://127.0.0.1:4000 — not the public tunnel.
+ * T2: served only by `adminApp` on 127.0.0.1:4001 (ADMIN_PORT). The tunnel points at :4000,
+ * where /api/admin/* is a plain 404.
  */
-app.get('/api/admin/ping', (req, res) => runAdmin(req, res, () => adminPing()));
-app.get('/api/admin/partners', (req, res) => runAdmin(req, res, () => adminListPartners()));
-app.post('/api/admin/partners', (req, res) => {
+const adminRouter = express.Router();
+adminRouter.get('/api/admin/ping', (req, res) => runAdmin(req, res, () => adminPing()));
+adminRouter.get('/api/admin/partners', (req, res) => runAdmin(req, res, () => adminListPartners()));
+adminRouter.post('/api/admin/partners', (req, res) => {
   const parsed = z
     .object({
       email: emailSchema,
@@ -754,15 +775,15 @@ app.post('/api/admin/partners', (req, res) => {
   }
   return runAdmin(req, res, () => adminCreatePartner(parsed.data));
 });
-app.patch('/api/admin/partners/:id/password', (req, res) => {
+adminRouter.patch('/api/admin/partners/:id/password', (req, res) => {
   const parsed = z.object({ password: passwordSchema }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   return runAdmin(req, res, () => adminSetPartnerPassword(String(req.params.id), parsed.data.password));
 });
-app.post('/api/admin/partners/:id/token', (req, res) =>
+adminRouter.post('/api/admin/partners/:id/token', (req, res) =>
   runAdmin(req, res, () => adminMintPartnerToken(String(req.params.id)))
 );
-app.get('/api/admin/leads', (req, res) =>
+adminRouter.get('/api/admin/leads', (req, res) =>
   runAdmin(req, res, () => {
     const limit = Number(req.query.limit) || 100;
     return adminListLeads(limit);
@@ -770,11 +791,11 @@ app.get('/api/admin/leads', (req, res) =>
 );
 
 /** Global category → SKU catalogue (CJ-71). */
-app.get('/api/admin/catalogue', (req, res) => runAdmin(req, res, () => adminListCatalogue()));
-app.post('/api/admin/catalogue/migrate', (req, res) =>
+adminRouter.get('/api/admin/catalogue', (req, res) => runAdmin(req, res, () => adminListCatalogue()));
+adminRouter.post('/api/admin/catalogue/migrate', (req, res) =>
   runAdmin(req, res, () => autoMigrateServiceCategories())
 );
-app.post('/api/admin/catalogue/categories', (req, res) => {
+adminRouter.post('/api/admin/catalogue/categories', (req, res) => {
   const parsed = z
     .object({
       label: z.string().trim().min(2).max(60),
@@ -785,7 +806,7 @@ app.post('/api/admin/catalogue/categories', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Category name required.' });
   return runAdmin(req, res, () => adminCreateCategory(parsed.data));
 });
-app.post('/api/admin/catalogue/services', (req, res) => {
+adminRouter.post('/api/admin/catalogue/services', (req, res) => {
   const parsed = z
     .object({
       categoryId: z.string().trim().min(1),
@@ -797,7 +818,7 @@ app.post('/api/admin/catalogue/services', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'categoryId + name required.' });
   return runAdmin(req, res, () => adminCreateCatalogueService(parsed.data));
 });
-app.patch('/api/admin/catalogue/services/:id', (req, res) => {
+adminRouter.patch('/api/admin/catalogue/services/:id', (req, res) => {
   const parsed = z
     .object({
       categoryId: z.string().trim().min(1).optional(),
@@ -814,9 +835,34 @@ app.patch('/api/admin/catalogue/services/:id', (req, res) => {
     return last;
   });
 });
-app.delete('/api/admin/catalogue/services/:id', (req, res) =>
+adminRouter.delete('/api/admin/catalogue/services/:id', (req, res) =>
   runAdmin(req, res, () => adminRemoveCatalogueService(String(req.params.id)))
 );
+
+export const adminApp = express();
+adminApp.set('trust proxy', false);
+adminApp.disable('x-powered-by');
+// Defence in depth: the admin listener only ever serves loopback peers.
+adminApp.use((req, res, next) => {
+  if (!isLoopback(socketIp(req))) {
+    res.status(401).json({ error: 'Unauthorized.' });
+    return;
+  }
+  next();
+});
+// Unauthenticated liveness for scripts/cutly-api.sh. Never touches the admin rate limits.
+adminApp.get('/health', (_req, res) => res.json({ status: 'ok', service: 'cutly-admin' }));
+adminApp.use((req, res, next) => (isAdminPath(req.path) ? next() : notFound(req, res)));
+adminApp.use(
+  cors({
+    origin(origin, callback) {
+      callback(null, !origin || corsOrigins.includes(origin));
+    }
+  })
+);
+adminApp.use(express.json({ limit: '2mb' }));
+adminApp.use(adminRouter);
+adminApp.use(notFound);
 
 /** Public Partner With Us lead — no auth. */
 app.post('/api/public/partner-leads', async (req, res) => {
@@ -838,7 +884,10 @@ app.post('/api/public/partner-leads', async (req, res) => {
     createPartnerLead({
       ...parsed.data,
       userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
-      ip: req.ip || null
+      ip: (() => {
+        const ip = getClientIp(req);
+        return ip === 'unknown' ? null : ip;
+      })()
     })
   );
 });
@@ -898,14 +947,8 @@ app.use((req, res, next) => {
   });
 });
 
-if (process.env.NODE_ENV !== 'test') {
-  // Bind all interfaces so Cloudflare Tunnel / LAN devices can reach the API.
-  app.listen(port, '0.0.0.0', () =>
-    console.log(
-      `CUTLY API listening on 0.0.0.0:${port} · payments=${paymentsEnabled() ? 'razorpay-test' : 'off'}`
-    )
-  );
-  // Auto-expire missed AWAITING_SHOP while API is awake; expire-on-read covers app open.
-  startAwaitingExpirySweep(60_000);
-}
+app.use(notFound);
+
+// No listen() here: importing this module must not start servers (Tester).
+// Process entry (listeners + sweeps): backend/src/main.ts.
 export default app;

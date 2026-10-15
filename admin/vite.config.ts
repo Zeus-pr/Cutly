@@ -2,7 +2,7 @@ import path from 'node:path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-/** Local ops portal — reuses CUTLY API on :4000. Does not touch the Expo app. */
+/** Local ops portal — talks to the CUTLY admin listener on 127.0.0.1:4001 (T2). Does not touch the Expo app. */
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -14,7 +14,7 @@ export default defineConfig({
     port: 5174,
     open: '/',
     proxy: {
-      '/api': 'http://127.0.0.1:4000'
+      '/api': 'http://127.0.0.1:4001'
     }
   }
 });
