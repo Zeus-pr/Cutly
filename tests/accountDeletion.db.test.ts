@@ -581,7 +581,9 @@ suite('T3 delete account (database)', () => {
       const del = call('DELETE', '/api/auth/account', { token: f.token, reauth: re.body.data.reauthToken });
       const [b, d] = await Promise.all([book, del]);
       expect(d.status).toBe(200);
-      expect(['booked', 'Sign in again.']).toContain(b);
+      // Safe outcomes: booked first (then cancelled by the delete), session already dead, or the
+      // delete released the hold first. The invariant that matters is the count check below.
+      expect(['booked', 'Sign in again.', 'Your hold expired. Go back and pick the slot again.']).toContain(b);
       expect(await prisma.booking.count({ where: { userId: f.user.id, status: { not: 'CANCELLED' } } })).toBe(0);
     }
   }, 30_000);

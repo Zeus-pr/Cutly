@@ -587,7 +587,10 @@ async function verifyService() {
   return { client, serviceSid: verifyServiceSid };
 }
 
-export async function sendPhoneOtp(phone: string) {
+/** #46: what an SMS code was sent for. Twilio Verify is per phone, so we bind the purpose here. */
+export type OtpPurpose = 'login' | 'reauth';
+
+export async function sendPhoneOtp(phone: string, purpose: OtpPurpose = 'login') {
   const recent = await prisma.phoneOtp.findFirst({ where: { phone, codeHash: 'twilio-verify' }, orderBy: { createdAt: 'desc' } });
   if (recent && Date.now() - recent.createdAt.getTime() < OTP_COOLDOWN_MS) {
     throw new Error('Wait a moment before requesting another code.');
@@ -599,8 +602,26 @@ export async function sendPhoneOtp(phone: string) {
     twilioError(error);
   }
   await prisma.phoneOtp.create({
-    data: { phone, codeHash: 'twilio-verify', expiresAt: new Date(Date.now() + OTP_TTL_MS) }
+    data: { phone, codeHash: 'twilio-verify', purpose, expiresAt: new Date(Date.now() + OTP_TTL_MS) }
   });
+}
+
+/**
+ * #46 (sec LOW): login and re-auth codes are not interchangeable. The latest unexpired send for
+ * this phone must be for `purpose`; checked BEFORE Twilio so a mismatched code is not consumed.
+ */
+export async function otpPurposeMatches(phone: string, purpose: OtpPurpose, now = new Date()) {
+  const latest = await prisma.phoneOtp.findFirst({
+    where: { phone, codeHash: 'twilio-verify', expiresAt: { gt: now } },
+    orderBy: { createdAt: 'desc' }
+  });
+  return latest?.purpose === purpose;
+}
+
+type VerifyCode = (phone: string, code: string) => Promise<boolean>;
+
+export function purposeBoundOtpCheck(purpose: OtpPurpose, verifyCode: VerifyCode = checkPhoneOtpCode): VerifyCode {
+  return async (phone, code) => (await otpPurposeMatches(phone, purpose)) && verifyCode(phone, code);
 }
 
 /** Twilio Verify check. True only when the code is approved for this phone. */
@@ -620,9 +641,9 @@ export async function verifyPhoneOtp(
   phone: string,
   code: string,
   mergeToken?: string,
-  deps: { checkOtp: (phone: string, code: string) => Promise<boolean> } = { checkOtp: checkPhoneOtpCode }
+  deps: { verifyCode: VerifyCode } = { verifyCode: checkPhoneOtpCode }
 ) {
-  if (!(await deps.checkOtp(phone, code))) throw new Error('That code is incorrect or expired.');
+  if (!(await purposeBoundOtpCheck('login', deps.verifyCode)(phone, code))) throw new Error('That code is incorrect or expired.');
   await prisma.phoneOtp.deleteMany({ where: { phone } });
 
   const byPhone = await prisma.user.findUnique({ where: { phone } });
@@ -672,10 +693,14 @@ export async function verifyPhoneOtp(
 }
 
 /** T3 step-up: POST /api/auth/reauth → one-time 5-minute token for DELETE /api/auth/account. */
-export async function startCustomerReauth(token: string, input: ReauthInput) {
+export async function startCustomerReauth(
+  token: string,
+  input: ReauthInput,
+  deps: { verifyCode: VerifyCode } = { verifyCode: checkPhoneOtpCode }
+) {
   const current = await userFromToken(token);
   const user = await prisma.user.findUniqueOrThrow({ where: { id: current.id } });
-  await verifyReauthProof(user, input, { checkOtp: checkPhoneOtpCode, verifyGoogle: defaultVerifyGoogle });
+  await verifyReauthProof(user, input, { checkOtp: purposeBoundOtpCheck('reauth', deps.verifyCode), verifyGoogle: defaultVerifyGoogle });
   if (input.method === 'otp' && user.phone) await prisma.phoneOtp.deleteMany({ where: { phone: user.phone } });
   return issueReauthToken(prisma, secret(), user.id, 'customer');
 }
@@ -684,7 +709,7 @@ export async function startCustomerReauth(token: string, input: ReauthInput) {
 export async function sendCustomerReauthOtp(token: string) {
   const current = await userFromToken(token);
   if (!current.phone) throw new AppError('This account has no phone. Use another way to confirm.', 400, 'REAUTH_NO_PHONE');
-  await sendPhoneOtp(current.phone);
+  await sendPhoneOtp(current.phone, 'reauth');
   return { sent: true as const, phoneLast4: current.phone.slice(-4) };
 }
 

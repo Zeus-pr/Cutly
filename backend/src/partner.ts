@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { BookingStatus, Prisma, PrismaClient, ShopKind } from '@prisma/client';
-import { checkPhoneOtpCode, jwtSecret, signToken, tokenVersionMatches } from './auth';
+import { purposeBoundOtpCheck, jwtSecret, signToken, tokenVersionMatches } from './auth';
 import {
   PARTNER_BLOCKING_STATUSES,
   blocksPartnerDelete,
@@ -1584,7 +1584,7 @@ export async function savePartnerPushToken(token: string, pushToken: string) {
 export async function startPartnerReauth(token: string, input: ReauthInput) {
   const current = await partnerFromToken(token);
   const partner = await prisma.partner.findUniqueOrThrow({ where: { id: current.id } });
-  await verifyReauthProof(partner, input, { checkOtp: checkPhoneOtpCode, verifyGoogle: defaultVerifyGoogle });
+  await verifyReauthProof(partner, input, { checkOtp: purposeBoundOtpCheck('reauth'), verifyGoogle: defaultVerifyGoogle });
   return issueReauthToken(prisma, jwtSecret(), partner.id, 'partner');
 }
 

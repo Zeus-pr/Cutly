@@ -17,6 +17,7 @@ suite('#46 delete re-auth API (database)', () => {
   let signToken: typeof import('../backend/src/auth').signToken;
   let verifyPhoneOtp: typeof import('../backend/src/auth').verifyPhoneOtp;
   let finishGoogleSignIn: typeof import('../backend/src/auth').finishGoogleSignIn;
+  let startCustomerReauth: typeof import('../backend/src/auth').startCustomerReauth;
   const tag = `i46${Date.now().toString(36)}`;
   let seq = 0;
   const uniquePhone = () => `+9190${String(Date.now() + ++seq).slice(-8)}`;
@@ -27,7 +28,7 @@ suite('#46 delete re-auth API (database)', () => {
     process.env.PHONE_HASH_KEY = 'test-phone-hash-key-0123456789';
     const { PrismaClient } = await import('@prisma/client');
     prisma = new PrismaClient();
-    ({ signToken, verifyPhoneOtp, finishGoogleSignIn } = await import('../backend/src/auth'));
+    ({ signToken, verifyPhoneOtp, finishGoogleSignIn, startCustomerReauth } = await import('../backend/src/auth'));
     const mod = await import('../backend/src/server');
     server = mod.app.listen(0, '127.0.0.1');
     await new Promise((r) => server.once('listening', r));
@@ -92,15 +93,44 @@ suite('#46 delete re-auth API (database)', () => {
     expect(second.body.data.restored).toBe(false);
   });
 
+  // Simulates POST /auth/otp/send or /auth/reauth/otp/send having gone out (Twilio stubbed).
+  async function sent(phone: string, purpose: 'login' | 'reauth') {
+    await prisma.phoneOtp.create({ data: { phone, codeHash: 'twilio-verify', purpose, expiresAt: new Date(Date.now() + 300_000) } });
+  }
+  const approve = { verifyCode: async () => true };
+
   it('OTP sign-in inside grace returns restored: true once (stubbed OTP check)', async () => {
     const { user } = await customer({ deletionRequestedAt: new Date(Date.now() - 86_400_000) });
-    const approve = { checkOtp: async () => true };
+    await sent(user.phone!, 'login');
     const first = await verifyPhoneOtp(user.phone!, '123456', undefined, approve);
     expect(first.restored).toBe(true);
     expect(first.user.id).toBe(user.id);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).deletionRequestedAt).toBeNull();
+    await sent(user.phone!, 'login');
     expect((await verifyPhoneOtp(user.phone!, '123456', undefined, approve)).restored).toBe(false);
-    await expect(verifyPhoneOtp(user.phone!, '000000', undefined, { checkOtp: async () => false })).rejects.toThrow();
+    await sent(user.phone!, 'login');
+    await expect(verifyPhoneOtp(user.phone!, '000000', undefined, { verifyCode: async () => false })).rejects.toThrow();
+  });
+
+  it('login and re-auth OTPs are not interchangeable (purpose-bound, checked before Twilio)', async () => {
+    const { user, token } = await customer();
+    let twilioCalls = 0;
+    const counting = { verifyCode: async () => (twilioCalls++, true) };
+    // A re-auth code cannot sign in.
+    await sent(user.phone!, 'reauth');
+    await expect(verifyPhoneOtp(user.phone!, '123456', undefined, counting)).rejects.toThrow(/incorrect or expired/);
+    // A login code cannot re-auth (closes the login /otp/send bypass of the re-auth send limit).
+    await sent(user.phone!, 'login');
+    await expect(startCustomerReauth(token, { method: 'otp', code: '123456' }, counting)).rejects.toMatchObject({ code: 'REAUTH_FAILED' });
+    expect(twilioCalls).toBe(0); // mismatches never reach Twilio, so the code is not consumed
+    // Matching purposes work.
+    await sent(user.phone!, 'reauth');
+    expect((await startCustomerReauth(token, { method: 'otp', code: '123456' }, counting)).reauthToken).toBeTruthy();
+    await sent(user.phone!, 'login');
+    expect((await verifyPhoneOtp(user.phone!, '123456', undefined, counting)).user.id).toBe(user.id);
+    // No send on record → rejected.
+    await prisma.phoneOtp.deleteMany({ where: { phone: user.phone! } });
+    await expect(startCustomerReauth(token, { method: 'otp', code: '123456' }, counting)).rejects.toMatchObject({ code: 'REAUTH_FAILED' });
   });
 
   it('Google sign-in inside grace returns restored: true (googleSub row and pending email owner)', async () => {

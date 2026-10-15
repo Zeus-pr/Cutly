@@ -357,6 +357,8 @@ model PhoneOtp {
   id String @id @default(cuid())
   phone String
   codeHash String
+  /// #46: 'login' (POST /auth/otp/send) or 'reauth' (POST /auth/reauth/otp/send). A code only verifies for its own purpose.
+  purpose String @default("login")
   expiresAt DateTime
   createdAt DateTime @default(now())
   @@index([phone, createdAt])
