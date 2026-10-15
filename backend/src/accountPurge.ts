@@ -90,7 +90,7 @@ async function purgePartner(tx: Tx, partnerId: string, cutoff: Date, now: Date) 
   // Decided (PR #45 item 5): shop renamed "Closed shop", city kept, public phone removed,
   // staff names replaced, photos deleted. Shop images are only stored as URLs / data: URLs in
   // ShopImage (there is no separate object storage), so deleting the rows deletes them.
-  const shops = await tx.shop.findMany({ where: { ownerPartnerId: partnerId }, select: { id: true } });
+  const shops = await tx.shop.findMany({ where: { ownerPartnerId: partnerId }, select: { id: true, phone: true } });
   const shopIds = shops.map((s) => s.id);
   if (shopIds.length) {
     await tx.shopImage.deleteMany({ where: { shopId: { in: shopIds } } });
@@ -100,9 +100,10 @@ async function purgePartner(tx: Tx, partnerId: string, cutoff: Date, now: Date) 
       data: { ...shopStatusData('CLOSED'), name: CLOSED_SHOP_NAME, phone: null, deletedAt: now }
     });
   }
-  // Partner With Us leads from this partner's phone: blank the number (column is NOT NULL).
-  const e164 = row.phone ? toE164(row.phone) : null;
-  if (e164) await tx.partnerLead.updateMany({ where: { phone: e164 }, data: { phone: '' } });
+  // Partner With Us leads: blank the number (column is NOT NULL). Partner sign-up never sets
+  // Partner.phone, so match the shop's public phone too (read above, before it was nulled).
+  const phones = [...new Set([row.phone, ...shops.map((s) => s.phone)].map((p) => (p ? toE164(p) : null)).filter((p): p is string => Boolean(p)))];
+  if (phones.length) await tx.partnerLead.updateMany({ where: { phone: { in: phones } }, data: { phone: '' } });
   await tx.partner.update({
     where: { id: partnerId },
     data: { name: null, phone: null, email: null, passwordHash: null, googleSub: null, pushToken: null, deletedAt: now }

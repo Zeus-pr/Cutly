@@ -325,6 +325,20 @@ suite('T3 delete account (database)', () => {
     expect(await prisma.review.count({ where: { bookingId: visit.id } })).toBe(0);
   });
 
+  it('purge scrubs PartnerLead by Shop.phone for an email-only partner (PR Review)', async () => {
+    const email = `${tag}-eo@example.com`;
+    const shopPhone = `+9191${String(Date.now()).slice(-8)}`;
+    const partner = await prisma.partner.create({ data: { email, passwordHash: 'x', deletionRequestedAt: new Date(Date.now() - 15 * 86_400_000) } });
+    const { shop } = await seedShop('eo', partner.id);
+    await prisma.shop.update({ where: { id: shop.id }, data: { phone: shopPhone, ...{ status: 'CLOSED', isActive: false } } });
+    const lead = await prisma.partnerLead.create({ data: { phone: shopPhone, shopName: 'eo' } });
+    const other = await prisma.partnerLead.create({ data: { phone: '+919000000000', shopName: 'other' } });
+    await runAccountPurge();
+    expect((await prisma.partnerLead.findUniqueOrThrow({ where: { id: lead.id } })).phone).toBe('');
+    expect((await prisma.partnerLead.findUniqueOrThrow({ where: { id: other.id } })).phone).toBe('+919000000000');
+    expect((await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } })).phone).toBeNull();
+  });
+
   it('adminApp is importable and answers without a listener', async () => {
     const s = adminApp.listen(0, '127.0.0.1');
     await new Promise((r) => s.once('listening', r));
