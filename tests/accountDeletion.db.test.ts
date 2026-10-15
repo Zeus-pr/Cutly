@@ -494,6 +494,18 @@ suite('T3 delete account (database)', () => {
     expect(statuses[5]).toBe(429);
   });
 
+  it('sec (c): bounding box keeps a shop just inside the 25 km radius (north edge and high latitude east edge)', async () => {
+    const north = await prisma.shop.create({ data: { name: 'n', address: 'a', city: 'c', latitude: 12 + 24.99 / 111.195, longitude: 77, setupDone: true } });
+    const res = await call('GET', '/api/shops?lat=12&lng=77&radiusKm=25');
+    expect((res.body.data as { id: string }[]).map((s) => s.id)).toContain(north.id);
+    // High-latitude sanity: ~24.8 km NE of 60°N.
+    const lat2 = 60 + 17 / 111.195;
+    const lng2 = 10 + 18 / (111.195 * Math.cos((lat2 * Math.PI) / 180));
+    const ne = await prisma.shop.create({ data: { name: 'ne', address: 'a', city: 'c', latitude: lat2, longitude: lng2, setupDone: true } });
+    const res2 = await call('GET', '/api/shops?lat=60&lng=10&radiusKm=25');
+    expect((res2.body.data as { id: string }[]).map((s) => s.id)).toContain(ne.id);
+  });
+
   it('DBA #10: Google sign-in never reclaims the email of a pending-deletion account', async () => {
     const { finishGoogleSignIn } = await import('../backend/src/auth');
     const email = `${tag}-g10@example.com`;

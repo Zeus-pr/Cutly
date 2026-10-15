@@ -220,8 +220,11 @@ export async function listNearbyShops(input: {
     .filter(Boolean);
   // DBA #6: bounding box first so Postgres can use Shop_active_lat_lng_idx; the exact
   // haversine radius filter still runs below.
-  const dLat = radius / 111.32;
-  const dLng = radius / (111.32 * Math.max(0.01, Math.cos((lat * Math.PI) / 180)));
+  // sec (c): 111.19 km/deg matches the haversine Earth radius (6371 km), plus 1% margin; the
+  // longitude span uses the latitude edge nearest the pole, so the box always covers the circle.
+  const dLat = (radius / 111.19) * 1.01;
+  const edgeLat = Math.min(89.9, Math.abs(lat) + dLat);
+  const dLng = dLat / Math.max(0.001, Math.cos((edgeLat * Math.PI) / 180));
   const rows = await prisma.shop.findMany({
     where: {
       setupDone: true,
