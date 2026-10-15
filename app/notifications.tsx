@@ -39,6 +39,11 @@ export default function NotificationsScreen() {
         // still navigate
       }
     }
+    // T4 (#9) screen 13 → 14: an email released to its owner opens Profile.
+    if (item.type === 'email_released' || item.type === 'email_changed' || item.data?.screen === 'profile') {
+      router.push('/(tabs)/profile');
+      return;
+    }
     const bookingId = item.data?.bookingId;
     if (bookingId) {
       router.push({ pathname: '/booking/[id]', params: { id: bookingId } });
@@ -113,7 +118,7 @@ export default function NotificationsScreen() {
                 </Text>
                 {unread ? <View style={styles.dot} /> : null}
               </View>
-              <Text style={styles.cardBody} numberOfLines={2}>
+              <Text style={styles.cardBody} numberOfLines={item.type === 'email_released' ? undefined : 2 /* V17: full body */}>
                 {item.body}
               </Text>
               <Text style={styles.when}>{formatDateTime(item.createdAt)}</Text>

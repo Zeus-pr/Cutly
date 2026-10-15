@@ -1,3 +1,4 @@
+import { InkToast } from '@/components/InkToast';
 import 'react-native-gesture-handler';
 import * as SecureStore from 'expo-secure-store';
 import * as SplashScreen from 'expo-splash-screen';
@@ -264,6 +265,7 @@ export default function Layout() {
           <View style={[styles.root, { backgroundColor: showBoot ? LAUNCH_BG : ACCENT }]} />
         )}
         <AppDialogHost />
+        <InkToast />
         {showBoot ? (
           <PatternWavesSplash
             ready={hydrated}

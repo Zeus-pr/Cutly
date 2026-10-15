@@ -28,6 +28,10 @@ type Props = {
   accentDigits?: boolean;
   /** Screen-reader label for the hidden input. */
   accessibilityLabel?: string;
+  /** T4 V7: white slots with coral digits (email codes). */
+  tone?: 'default' | 'email';
+  /** T4 V8: danger border on every slot (wrong code). */
+  error?: boolean;
 };
 
 /**
@@ -42,7 +46,9 @@ export function CodeSlots({
   autoFocus = true,
   disabled,
   accentDigits = false,
-  accessibilityLabel = 'Verification code'
+  accessibilityLabel = 'Verification code',
+  tone = 'default',
+  error = false
 }: Props) {
   const colors = useColors();
   const styles = useThemedStyles(slotStyles);
@@ -83,7 +89,9 @@ export function CodeSlots({
             digit={digits[i] || ''}
             active={focused && (digits.length === i || (digits.length === length && i === length - 1))}
             filled={Boolean(digits[i])}
-            accentDigits={accentDigits}
+            accentDigits={accentDigits || tone === 'email'}
+            whiteFill={tone === 'email'}
+            error={error}
             colors={colors}
             styles={styles}
           />
@@ -114,6 +122,8 @@ function Slot({
   active,
   filled,
   accentDigits,
+  whiteFill = false,
+  error = false,
   colors,
   styles
 }: {
@@ -121,6 +131,8 @@ function Slot({
   active: boolean;
   filled: boolean;
   accentDigits: boolean;
+  whiteFill?: boolean;
+  error?: boolean;
   colors: Palette;
   styles: ReturnType<typeof slotStyles>;
 }) {
@@ -138,11 +150,11 @@ function Slot({
 
   const anim = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
-    borderColor: border.value > 0.5 ? colors.accent : colors.line
+    borderColor: error ? colors.danger : border.value > 0.5 ? colors.accent : colors.line
   }));
 
   return (
-    <Animated.View style={[styles.slot, anim, filled && styles.slotFilled]}>
+    <Animated.View style={[styles.slot, anim, filled && !whiteFill && styles.slotFilled]}>
       <Text style={[styles.digit, accentDigits && filled && styles.digitAccent]}>{digit}</Text>
     </Animated.View>
   );

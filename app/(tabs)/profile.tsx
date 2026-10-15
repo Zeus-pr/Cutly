@@ -1,3 +1,4 @@
+import { displayPhone } from '@/utils/emailVerifyFlow';
 import { useEffect, useState, type ComponentProps } from 'react';
 import {
   Linking,
@@ -13,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { PressScale } from '@/components/PressScale';
@@ -25,6 +27,11 @@ import { appAlert } from '@/store/useDialogStore';
 import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
 import { useSessionStore } from '@/store/useSessionStore';
 import { SUPPORT_WHATSAPP_URL } from '@/constants/support';
+import { VERIFY_NUDGE_SNOOZE_MS, nudgeVisible } from '@/utils/emailVerifyFlow';
+
+/** T4 spec 08: dismissing the Verify banner hides it for 7 days. */
+const NUDGE_KEY = 'cutly.verifyNudgeUntil';
+const RELEASED_KEY = 'cutly.releasedNudgeDismissed';
 
 /** Same options as complete-profile. */
 const GENDERS = [
@@ -53,8 +60,11 @@ export default function Profile() {
   const name = useSessionStore((state) => state.name);
   const gender = useSessionStore((state) => state.gender);
   const googleLinked = useSessionStore((state) => state.googleLinked);
+  const emailVerified = useSessionStore((state) => state.emailVerified);
+  const emailReleased = useSessionStore((state) => state.emailReleased);
+  const [snoozedUntil, setSnoozedUntil] = useState<number | null>(null);
+  const [releasedDismissed, setReleasedDismissed] = useState(false);
   const display = name?.trim() || 'Add your name';
-  const contact = phone || email || '';
   const version = Constants.expoConfig?.version || '1.0.0';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name || '');
@@ -66,7 +76,28 @@ export default function Profile() {
 
   useEffect(() => {
     void refreshProfile();
+    void SecureStore.getItemAsync(NUDGE_KEY).then((v) => setSnoozedUntil(v ? Number(v) || null : null));
+    void SecureStore.getItemAsync(RELEASED_KEY).then((v) => setReleasedDismissed(v === '1'));
   }, []);
+
+  const showVerify = nudgeVisible({ email, emailVerified, snoozedUntil });
+  const showReleased = !email && emailReleased && !releasedDismissed;
+
+  function snoozeVerify() {
+    const until = Date.now() + VERIFY_NUDGE_SNOOZE_MS;
+    setSnoozedUntil(until);
+    void SecureStore.setItemAsync(NUDGE_KEY, String(until));
+  }
+
+  function dismissReleased() {
+    setReleasedDismissed(true);
+    void SecureStore.setItemAsync(RELEASED_KEY, '1');
+  }
+
+  function openEmail(mode?: 'verify') {
+    setEditing(false);
+    router.push(mode ? { pathname: '/account/email', params: { mode } } : '/account/email');
+  }
 
   function openEdit() {
     setDraft(name || '');
@@ -191,7 +222,20 @@ export default function Profile() {
           <View style={styles.profileTop}>
             <View style={styles.profileCopy}>
               <Text style={styles.name}>{display.toUpperCase()}</Text>
-              {contact ? <Text style={styles.phone}>{contact}</Text> : null}
+              {phone ? <Text style={styles.phone}>{displayPhone(phone)}</Text> : null}
+              {email ? (
+                // V13: "Not verified" pill inline with the email.
+                <View style={styles.emailLine}>
+                  <Text style={[styles.phone, styles.emailText]} numberOfLines={1}>{email}</Text>
+                  {!emailVerified ? (
+                    <View style={styles.pill} accessibilityLabel="Email not verified">
+                      <Ionicons name="alert-circle-outline" size={12} color={colors.danger} />
+                      <Text style={styles.pillText}>Not verified</Text>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+              {!email && emailReleased ? <Text style={styles.phone}>No email added</Text> : null}
               {genderLabelOf(gender) ? <Text style={styles.phone}>{genderLabelOf(gender)}</Text> : null}
               {!phone ? <Text style={styles.warn}>Add a phone number to book</Text> : null}
             </View>
@@ -201,6 +245,27 @@ export default function Profile() {
             </PressScale>
           </View>
         </View>
+
+        {showVerify ? (
+          <NudgeBanner
+            icon="mail-unread-outline"
+            title="Verify your email"
+            body={`Confirm ${email} so you can always sign in with it.`}
+            cta="Verify now"
+            onCta={() => openEmail('verify')}
+            onClose={snoozeVerify}
+          />
+        ) : null}
+        {showReleased ? (
+          <NudgeBanner
+            icon="information-circle-outline"
+            title="Your email was removed"
+            body="Someone proved they own it. Your phone sign-in still works. Add an email you own."
+            cta="Add email"
+            onCta={() => openEmail()}
+            onClose={dismissReleased}
+          />
+        ) : null}
 
         <View style={styles.shortcutStack}>
           {shortcuts.map((row) => (
@@ -259,6 +324,15 @@ export default function Profile() {
               keyboardType="phone-pad"
               style={styles.input}
             />
+            <View style={styles.emailRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.emailLabel}>Email</Text>
+                <Text style={styles.emailValue} numberOfLines={1}>{email || 'No email added'}</Text>
+              </View>
+              <PressScale style={styles.emailLink} onPress={() => openEmail()} haptic accessibilityLabel={email ? 'Change email' : 'Add email'}>
+                <Text style={styles.emailLinkText}>{email ? 'Change' : 'Add'}</Text>
+              </PressScale>
+            </View>
             <PressScale style={styles.select} onPress={() => setGenderOpen((v) => !v)} haptic>
               <Text style={[styles.selectText, !draftGender && styles.selectPlaceholder]}>
                 {genderLabelOf(draftGender) || 'Select gender'}
@@ -289,6 +363,41 @@ export default function Profile() {
         </Pressable>
       </Modal>
     </SafeAreaView>
+  );
+}
+
+/** T4 (#9) spec 08 / 14: coral-edged nudge card with a pill CTA and a 44 px close. */
+function NudgeBanner({
+  icon,
+  title,
+  body,
+  cta,
+  onCta,
+  onClose
+}: {
+  icon: Ion;
+  title: string;
+  body: string;
+  cta: string;
+  onCta: () => void;
+  onClose: () => void;
+}) {
+  const colors = useColors();
+  const styles = useThemedStyles(profileStyles);
+  return (
+    <View style={styles.banner}>
+      <Ionicons name={icon} size={22} color={colors.accent} />
+      <View style={styles.bannerCopy}>
+        <Text style={styles.bannerTitle} accessibilityRole="header">{title}</Text>
+        <Text style={styles.bannerBody}>{body}</Text>
+        <PressScale style={styles.bannerCta} onPress={onCta} haptic>
+          <Text style={styles.bannerCtaText}>{cta}</Text>
+        </PressScale>
+      </View>
+      <PressScale style={styles.bannerClose} onPress={onClose} accessibilityLabel="Dismiss" haptic>
+        <Ionicons name="close" size={20} color={colors.muted} />
+      </PressScale>
+    </View>
   );
 }
 
@@ -351,6 +460,8 @@ function profileStyles(colors: Palette) {
       gap: spacing.sm
     },
     profileCopy: { flex: 1, gap: 4 },
+    emailLine: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'nowrap' },
+    emailText: { flexShrink: 1 },
     name: { fontFamily: fontFamily.bold, fontSize: 18, color: colors.ink, letterSpacing: 0.4 },
     phone: { fontFamily: fontFamily.regular, fontSize: 14, color: colors.muted },
     warn: { fontFamily: fontFamily.medium, fontSize: 13, color: colors.accentDark },
@@ -444,6 +555,59 @@ function profileStyles(colors: Palette) {
     },
     genderRowLast: { borderBottomWidth: 0 },
     genderRowText: { fontFamily: fontFamily.medium, fontSize: 15, color: colors.ink },
-    error: { fontFamily: fontFamily.medium, color: colors.danger, fontSize: 13 }
+    error: { fontFamily: fontFamily.medium, color: colors.danger, fontSize: 13 },
+    pill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      alignSelf: 'flex-start',
+      backgroundColor: colors.sand,
+      borderRadius: radii.pill,
+      paddingHorizontal: 8,
+      paddingVertical: 3
+    },
+    // Spec §6 decision: danger on sand (≈5.2:1), not accentDark.
+    pillText: { fontFamily: fontFamily.medium, fontSize: 12, color: colors.danger },
+    banner: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 12,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.line,
+      borderLeftWidth: 4,
+      borderLeftColor: colors.accent,
+      borderRadius: radii.lg,
+      padding: 16
+    },
+    bannerCopy: { flex: 1, gap: 4 },
+    bannerTitle: { fontFamily: fontFamily.semibold, fontSize: 15, color: colors.ink },
+    bannerBody: { fontFamily: fontFamily.regular, fontSize: 13, lineHeight: 18, color: colors.muted },
+    bannerCta: {
+      alignSelf: 'flex-start',
+      height: 34,
+      borderRadius: radii.pill,
+      backgroundColor: colors.accent,
+      paddingHorizontal: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 6
+    },
+    bannerCtaText: { fontFamily: fontFamily.semibold, fontSize: 13, color: colors.white },
+    bannerClose: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginTop: -12, marginRight: -12 },
+    emailRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: radii.md,
+      borderWidth: 1,
+      borderColor: colors.line,
+      paddingLeft: spacing.md,
+      minHeight: 54
+    },
+    emailLabel: { fontFamily: fontFamily.regular, fontSize: 12, color: colors.muted },
+    emailValue: { fontFamily: fontFamily.regular, fontSize: 16, color: colors.ink },
+    emailLink: { minWidth: 64, height: 44, alignItems: 'center', justifyContent: 'center' },
+    emailLinkText: { fontFamily: fontFamily.semibold, fontSize: 14, color: colors.accent }
   });
 }

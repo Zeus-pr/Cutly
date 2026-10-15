@@ -16,7 +16,9 @@ import { cancelPolicy } from './cancelPolicy';
 import { AppError } from './httpError';
 import { archivedIdempotencyKey } from './money';
 import { notifyShopPartner } from './push';
-import { consumeReauthToken, defaultVerifyGoogle, issueReauthToken, verifyReauthProof, type ReauthInput } from './reauth';
+import { REAUTH_ACTION, consumeReauthToken, defaultVerifyGoogle, issueReauthToken, verifyReauthProof, type ReauthAction, type ReauthInput } from './reauth';
+import { GOOGLE_EMAIL_UNVERIFIED_OWNER, releaseUnverifiedHolders, ReleaseStale } from './emailRelease';
+import { isRetryableTxError } from './emailCode';
 
 const prisma = new PrismaClient();
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -31,6 +33,8 @@ export type PublicUser = {
   dateOfBirth?: string | null;
   inviteCode?: string | null;
   googleLinked?: boolean;
+  /** T4 (#9): false until Google or an emailed code proves the address (drives the Profile nudge). */
+  emailVerified?: boolean;
   /** #46: lets the app pick the re-auth method (C2 OTP / C4 Google / C5 password). */
   hasPassword?: boolean;
   authMethods?: AuthMethod[];
@@ -61,6 +65,7 @@ function publicUser(user: {
   inviteCode?: string | null;
   googleSub?: string | null;
   passwordHash?: string | null;
+  emailVerified?: boolean;
 }): PublicUser {
   const authMethods: AuthMethod[] = [];
   if (user.phone) authMethods.push('phone');
@@ -75,6 +80,7 @@ function publicUser(user: {
     dateOfBirth: dateOnly(user.dateOfBirth),
     inviteCode: user.inviteCode ?? null,
     googleLinked: Boolean(user.googleSub),
+    emailVerified: Boolean(user.email && user.emailVerified),
     hasPassword: Boolean(user.passwordHash),
     authMethods
   };
@@ -106,7 +112,7 @@ export function tokenVersionMatches(payload: object, tokenVersion: number) {
   return tv === tokenVersion;
 }
 
-function session(user: User, restored = false) {
+export function session(user: User, restored = false) {
   const profile = publicUser(user);
   // `restored: true` only on the sign-in that cancelled a pending deletion (app shows C9 once).
   return { token: signToken(profile, 'customer', user.tokenVersion), user: profile, restored };
@@ -148,7 +154,7 @@ export function sameEmail(stored: string, typed: string) {
   return normalEmail(stored) === normalEmail(typed);
 }
 
-async function findUsersByEmail(email: string) {
+export async function findUsersByEmail(email: string) {
   const normalised = normalEmail(email);
   return prisma.$queryRaw<User[]>`
     SELECT * FROM "User"
@@ -226,16 +232,9 @@ export async function updateProfile(
     data.phone = phone;
   }
   if (input.email !== undefined) {
-    const email = normalEmail(input.email);
-    if (!email) {
-      data.email = null;
-    } else {
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid email.');
-      const taken = (await findUsersByEmail(email)).some((row) => row.id !== current.id);
-      if (taken) throw new Error('That email is already on another account.');
-      data.email = email;
-    }
-    if (shouldClearEmailVerified(current.email, data.email ?? null)) data.emailVerified = false;
+    // T4 (#9): the address changes only through POST /auth/email/change + a code to the new address.
+    const same = normalEmail(input.email) === (current.email ? normalEmail(current.email) : '');
+    if (!same) throw new AppError('Change your email from Edit profile › Email.', 400, 'USE_EMAIL_CHANGE');
   }
   if (input.gender !== undefined) {
     const gender = input.gender.trim().toLowerCase();
@@ -335,7 +334,7 @@ export type GoogleLinkPlan =
       reclaimEmail: string | null;
     }
   | { kind: 'create'; email: string | null; reclaimFromUserId: string | null; reclaimEmail: string | null }
-  | { kind: 'reject'; message: string };
+  | { kind: 'reject'; message: string; code?: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' };
 
 /**
  * SEC-03: link a verified Google email only to a CUTLY profile whose stored email
@@ -350,19 +349,22 @@ export function planGoogleLink(input: {
 }): GoogleLinkPlan {
   const { googleSub, trustedEmail, bySub, byEmail } = input;
   const other = byEmail && (!bySub || byEmail.id !== bySub.id) ? byEmail : null;
-  const reclaimTarget = other && !other.emailVerified && !other.hasPassword ? other : null;
+  // PR Review #58 blocker (a): an older account holding this address unverified may be the
+  // Google owner's own, so Google sign-in neither splits it nor releases the email.
+  if (trustedEmail && other && !other.emailVerified) {
+    return { kind: 'reject', message: GOOGLE_EMAIL_UNVERIFIED_OWNER().message, code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' };
+  }
 
   if (bySub) {
     const matchesStored = Boolean(trustedEmail && bySub.email && sameEmail(bySub.email, trustedEmail));
     const fillEmpty = Boolean(trustedEmail && !bySub.email && !other);
-    const reclaim = Boolean(trustedEmail && !bySub.email && reclaimTarget);
     return {
       kind: 'link',
       userId: bySub.id,
-      storeEmail: fillEmpty || reclaim ? trustedEmail : null,
-      markEmailVerified: matchesStored || fillEmpty || reclaim,
-      reclaimFromUserId: reclaim && reclaimTarget ? reclaimTarget.id : null,
-      reclaimEmail: reclaim && reclaimTarget?.email ? reclaimTarget.email : null
+      storeEmail: fillEmpty ? trustedEmail : null,
+      markEmailVerified: matchesStored || fillEmpty,
+      reclaimFromUserId: null,
+      reclaimEmail: null
     };
   }
 
@@ -381,22 +383,6 @@ export function planGoogleLink(input: {
     };
   }
 
-  if (reclaimTarget && trustedEmail) {
-    return {
-      kind: 'create',
-      email: trustedEmail,
-      reclaimFromUserId: reclaimTarget.id,
-      reclaimEmail: reclaimTarget.email
-    };
-  }
-
-  if (other?.hasPassword) {
-    return {
-      kind: 'reject',
-      message: GOOGLE_LINK_AFTER_PASSWORD
-    };
-  }
-
   return { kind: 'create', email: trustedEmail, reclaimFromUserId: null, reclaimEmail: null };
 }
 
@@ -409,7 +395,8 @@ export class GoogleLinkRetry extends Error {
 }
 
 export function shouldRetryGoogleLink(error: unknown) {
-  return error instanceof GoogleLinkRetry || isPrismaUniqueConflict(error);
+  // DBA #58 item 2: deadlock / serialization failures on the release path retry too.
+  return error instanceof GoogleLinkRetry || isPrismaUniqueConflict(error) || isRetryableTxError(error);
 }
 
 export function isPrismaUniqueConflict(error: unknown) {
@@ -435,7 +422,8 @@ export async function signInWithGoogle(idToken: string, mergeToken?: string) {
   }
 }
 
-async function linkGoogleToSignedIn(googleSub: string, email: string | null, name: string | null, mergeToken: string) {
+/** Exported for tests (Sec #58 item 3). */
+export async function linkGoogleToSignedIn(googleSub: string, email: string | null, name: string | null, mergeToken: string) {
   const signedIn = await userFromToken(mergeToken);
   const account = await prisma.user.findUnique({ where: { id: signedIn.id } });
   if (!account) throw new Error('Sign in again.');
@@ -451,37 +439,38 @@ async function linkGoogleToSignedIn(googleSub: string, email: string | null, nam
   if (!plan.ok) throw new Error(plan.message);
   if (!account.email && email) {
     const holders = await findUsersByEmail(email);
-    if (holders.some((row) => row.id !== account.id)) throw new Error('That email is already on another account.');
+    const others = holders.filter((row) => row.id !== account.id);
+    if (others.some((row) => row.emailVerified || isDeletionRequested(row))) throw new Error('That email is already on another account.');
+    if (others.length) throw GOOGLE_EMAIL_UNVERIFIED_OWNER();
   }
   let user;
   try {
-    user = await prisma.user.update({
-      where: { id: account.id },
-      data: {
-        googleSub,
-        email: account.email || email,
-        emailVerified: true,
-        name: account.name || name
+    // Sec #58 item 3: same release step as cold Google sign-in (locks, re-check, pendings/codes
+    // for the address invalidated); unverified holders are refused, never stripped (blocker (a)).
+    user = await prisma.$transaction(async (tx) => {
+      if (email) {
+        try {
+          await releaseUnverifiedHolders(tx, email, account.id, 'google_owner', { refuseUnverified: GOOGLE_EMAIL_UNVERIFIED_OWNER });
+        } catch (error) {
+          if (error instanceof ReleaseStale) throw new GoogleLinkRetry();
+          throw error;
+        }
       }
+      return tx.user.update({
+        where: { id: account.id },
+        data: {
+          googleSub,
+          email: account.email || email,
+          emailVerified: true,
+          name: account.name || name
+        }
+      });
     });
   } catch (error) {
-    if (isPrismaUniqueConflict(error)) throw new Error('That email is already on another account.');
+    if (isPrismaUniqueConflict(error) || error instanceof GoogleLinkRetry) throw new Error('That email is already on another account.');
     throw error;
   }
   return session(user);
-}
-
-/**
- * Move a typed, unverified email off a password-less row so Google can claim it.
- * DBA #10: never strips the email off an account that is pending deletion or purged (the row
- * may have become pending after the plan was made); the caller then retries the lookup.
- */
-export async function clearReclaimedEmail(tx: Prisma.TransactionClient, userId: string, email: string) {
-  const cleared = await tx.user.updateMany({
-    where: { id: userId, email, emailVerified: false, passwordHash: null, deletionRequestedAt: null, deletedAt: null },
-    data: { email: null, emailVerified: false }
-  });
-  if (cleared.count !== 1) throw new GoogleLinkRetry();
 }
 
 const GOOGLE_SIGN_IN_FAILED = 'Google sign-in failed. Try again.';
@@ -533,17 +522,26 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
         }
       : null
   });
-  if (plan.kind === 'reject') throw new Error(plan.message);
+  if (plan.kind === 'reject') throw plan.code ? GOOGLE_EMAIL_UNVERIFIED_OWNER() : new Error(plan.message);
   const linked = plan.kind === 'link' ? (plan.userId === bySub?.id ? bySub : byEmail) : null;
   const user = await prisma.$transaction(async (tx) => {
-    if (plan.reclaimFromUserId) {
-      if (!plan.reclaimEmail) throw new GoogleLinkRetry();
-      await clearReclaimedEmail(tx, plan.reclaimFromUserId, plan.reclaimEmail);
+    if (email && (plan.kind === 'create' ? plan.email : plan.storeEmail)) {
+      // Re-check under lock (a holder may have appeared since the plan) and invalidate other
+      // pendings/codes for the address. Unverified holders are refused (blocker (a)).
+      try {
+        await releaseUnverifiedHolders(tx, email, plan.kind === 'link' ? plan.userId : null, 'google_owner', {
+          refuseUnverified: GOOGLE_EMAIL_UNVERIFIED_OWNER
+        });
+      } catch (error) {
+        if (error instanceof ReleaseStale) throw new GoogleLinkRetry();
+        throw error;
+      }
     }
     if (plan.kind === 'create') {
-      return tx.user.create({
+      const created = await tx.user.create({
         data: { googleSub, email: plan.email, emailVerified: Boolean(plan.email), name }
       });
+      return created;
     }
     return tx.user.update({
       where: { id: plan.userId },
@@ -706,13 +704,14 @@ export async function verifyPhoneOtp(
 export async function startCustomerReauth(
   token: string,
   input: ReauthInput,
-  deps: { verifyCode: VerifyCode } = { verifyCode: checkPhoneOtpCode }
+  deps: { verifyCode: VerifyCode } = { verifyCode: checkPhoneOtpCode },
+  action: ReauthAction = REAUTH_ACTION
 ) {
   const current = await userFromToken(token);
   const user = await prisma.user.findUniqueOrThrow({ where: { id: current.id } });
   await verifyReauthProof(user, input, { checkOtp: purposeBoundOtpCheck('reauth', deps.verifyCode), verifyGoogle: defaultVerifyGoogle });
   if (input.method === 'otp' && user.phone) await prisma.phoneOtp.deleteMany({ where: { phone: user.phone, purpose: 'reauth' } });
-  return issueReauthToken(prisma, secret(), user.id, 'customer');
+  return issueReauthToken(prisma, secret(), user.id, 'customer', new Date(), action);
 }
 
 /** #46: re-auth SMS to the signed-in account's own phone (never a phone from the request). */

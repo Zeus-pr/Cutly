@@ -17,6 +17,8 @@ type SessionUser = {
   googleLinked?: boolean;
   hasPassword?: boolean;
   authMethods?: AuthMethod[];
+  emailVerified?: boolean;
+  emailReleased?: boolean;
 };
 
 async function post<T>(path: string, body: unknown, token?: string): Promise<T> {
@@ -38,7 +40,7 @@ async function post<T>(path: string, body: unknown, token?: string): Promise<T> 
   return payload.data as T;
 }
 
-function save(session: { token: string; user: SessionUser; restored?: boolean }) {
+export function save(session: { token: string; user: SessionUser; restored?: boolean }) {
   const user = session.user;
   // #46 C9: this sign-in cancelled a pending deletion.
   useSessionStore.getState().setRestoredNotice(session.restored ? 'customer' : null);
@@ -51,7 +53,9 @@ function save(session: { token: string; user: SessionUser; restored?: boolean })
     dateOfBirth: user.dateOfBirth ?? null,
     googleLinked: Boolean(user.googleLinked),
     hasPassword: Boolean(user.hasPassword),
-    authMethods: user.authMethods ?? null
+    authMethods: user.authMethods ?? null,
+    emailVerified: Boolean(user.emailVerified),
+    emailReleased: Boolean(user.emailReleased)
   });
 }
 

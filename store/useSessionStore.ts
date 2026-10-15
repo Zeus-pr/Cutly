@@ -17,6 +17,10 @@ type SessionState = {
   /** #46: from /auth/me — picks the re-auth method for Delete account. */
   hasPassword: boolean;
   authMethods: AuthMethod[] | null;
+  /** T4 (#9): from /auth/me — the Profile "Not verified" pill + Verify banner. */
+  emailVerified: boolean;
+  /** T4 (#9): the address was released to its proven owner (screen 14). */
+  emailReleased: boolean;
   /** #46: set by a sign-in that cancelled a pending deletion (C9 / P3), cleared once shown. */
   restoredNotice: Audience | null;
   /** #46: epoch ms when re-auth may be tried again after a 429 (session-only, survives navigation). */
@@ -45,6 +49,8 @@ type SessionState = {
     googleLinked?: boolean;
     hasPassword?: boolean;
     authMethods?: AuthMethod[] | null;
+    emailVerified?: boolean;
+    emailReleased?: boolean;
   }) => void;
   setCity: (city: string) => void;
   passIntro: () => void;
@@ -89,6 +95,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   googleLinked: false,
   hasPassword: false,
   authMethods: null,
+  emailVerified: false,
+  emailReleased: false,
   restoredNotice: null,
   reauthRetryAt: null,
   setRestoredNotice: (restoredNotice) => set({ restoredNotice }),
@@ -117,7 +125,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       dateOfBirth: profile.dateOfBirth === undefined ? get().dateOfBirth : profile.dateOfBirth,
       googleLinked: profile.googleLinked === undefined ? get().googleLinked : profile.googleLinked,
       hasPassword: profile.hasPassword === undefined ? get().hasPassword : profile.hasPassword,
-      authMethods: profile.authMethods === undefined ? get().authMethods : profile.authMethods
+      authMethods: profile.authMethods === undefined ? get().authMethods : profile.authMethods,
+      emailVerified: profile.emailVerified === undefined ? get().emailVerified : profile.emailVerified,
+      emailReleased: profile.emailReleased === undefined ? get().emailReleased : profile.emailReleased
     };
     set(next);
     void SecureStore.setItemAsync(phoneKey, next.phone || '');
@@ -210,6 +220,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       googleLinked: false,
       hasPassword: false,
       authMethods: null,
+      emailVerified: false,
+      emailReleased: false,
       reauthRetryAt: null,
       introDone: false,
       launchDone: false,

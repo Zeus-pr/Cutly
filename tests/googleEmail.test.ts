@@ -128,21 +128,40 @@ describe('planGoogleLink (SEC-03)', () => {
     });
   });
 
-  it('leaves a password account’s email in place', () => {
+  it('PR Review #58 (a): an UNVERIFIED password account → GOOGLE_EMAIL_UNVERIFIED_OWNER (no split, no release)', () => {
     expect(
       planGoogleLink({
         googleSub,
         trustedEmail,
         bySub: null,
-        byEmail: hit({ id: 'password', emailVerified: false, hasPassword: true })
+        byEmail: hit({ id: 'password', email: trustedEmail, emailVerified: false, hasPassword: true })
       })
-    ).toEqual({
-      kind: 'reject',
-      message: 'You already have a CUTLY account with this email. Sign in with your password, then link Google.'
-    });
+    ).toEqual({ kind: 'reject', message: expect.stringMatching(/phone number or password/), code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' });
   });
 
-  it('moves a typed email onto the new Google profile', () => {
+  it('T4 (#9) P4: a VERIFIED password account with the same email is auto-linked', () => {
+    expect(
+      planGoogleLink({
+        googleSub,
+        trustedEmail,
+        bySub: null,
+        byEmail: hit({ id: 'password', email: trustedEmail, emailVerified: true, hasPassword: true })
+      })
+    ).toMatchObject({ kind: 'link', userId: 'password', markEmailVerified: true, reclaimFromUserId: null });
+  });
+
+  it('T4 (#9): a VERIFIED account on another Google login still rejects', () => {
+    expect(
+      planGoogleLink({
+        googleSub,
+        trustedEmail,
+        bySub: null,
+        byEmail: hit({ id: 'v', email: trustedEmail, emailVerified: true, hasPassword: true, googleSub: 'someone-else' })
+      })
+    ).toMatchObject({ kind: 'reject' });
+  });
+
+  it('PR Review #58 (a): a typed unverified email is not moved onto a new Google profile', () => {
     expect(
       planGoogleLink({
         googleSub,
@@ -150,7 +169,7 @@ describe('planGoogleLink (SEC-03)', () => {
         bySub: null,
         byEmail: hit({ id: 'typed', emailVerified: false })
       })
-    ).toEqual({ kind: 'create', email: trustedEmail, reclaimFromUserId: 'typed', reclaimEmail: 'guest@cutly.buzz' });
+    ).toEqual({ kind: 'reject', message: expect.stringMatching(/phone number or password/), code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' });
   });
 
   it('links when the stored email was already verified and has no other Google account', () => {
@@ -182,7 +201,7 @@ describe('planGoogleLink (SEC-03)', () => {
     ).toEqual({ kind: 'reject', message: 'This Google account does not match that email on CUTLY.' });
   });
 
-  it('keeps the existing Google profile when another account is squatting the email', () => {
+  it('PR Review #58 (a): an existing Google profile does not take an unverified holder\'s email', () => {
     expect(
       planGoogleLink({
         googleSub,
@@ -190,14 +209,7 @@ describe('planGoogleLink (SEC-03)', () => {
         bySub: hit({ id: 'mine', email: null, googleSub, emailVerified: false }),
         byEmail: hit({ id: 'squat', emailVerified: false })
       })
-    ).toEqual({
-      kind: 'link',
-      userId: 'mine',
-      storeEmail: trustedEmail,
-      markEmailVerified: true,
-      reclaimFromUserId: 'squat',
-      reclaimEmail: 'guest@cutly.buzz'
-    });
+    ).toEqual({ kind: 'reject', message: expect.stringMatching(/phone number or password/), code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' });
   });
 
   it('marks the email verified when this Google profile already has that address', () => {
