@@ -1,6 +1,8 @@
 #!/bin/zsh
 # Keep CUTLY API alive outside Cursor (ops-style). Safe to re-run.
-# Usage: scripts/cutly-api.sh start|stop|status|ensure|watch
+# Usage: scripts/cutly-api.sh start|stop|restart|status|ensure|watch
+# After pulling a schema change: `npx prisma migrate deploy`, then `restart`.
+# `start`/`ensure` keep an already-healthy API as is and will NOT pick up a new Prisma client.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -71,6 +73,21 @@ start_api() {
     fi
   done
 
+  # Keep the generated Prisma client in sync with schema.prisma (after git pull / merges).
+  # A stale client makes queries on new columns throw (e.g. Shop.status after T3).
+  # Runs only when a new process is spawned; a healthy running API is left alone,
+  # so after a schema pull use `restart` (stop + start) to load the new client.
+  # Migrations are NOT applied here: run `npx prisma migrate deploy` deliberately.
+  local PRISMA_CLI="$ROOT/node_modules/prisma/build/index.js"
+  if [[ -f "$PRISMA_CLI" ]]; then
+    if ! (cd "$ROOT" && "$NODE" "$PRISMA_CLI" generate >>"$LOG" 2>&1); then
+      echo "prisma generate failed — see $LOG" >&2
+      exit 1
+    fi
+  else
+    echo "Missing prisma CLI — run npm install in $ROOT" >&2
+    exit 1
+  fi
   cd "$ROOT"
   # Detach fully so Cursor/agent shell exit cannot kill the API
   if [[ -f "$TSX_CLI" ]]; then
@@ -150,11 +167,12 @@ cmd="${1:-ensure}"
 case "$cmd" in
   start) start_api ;;
   stop) stop_api ;;
+  restart) stop_api; start_api ;;
   status) status_api ;;
   ensure) ensure_api ;;
   watch) watch_api ;;
   *)
-    echo "Usage: $0 start|stop|status|ensure|watch" >&2
+    echo "Usage: $0 start|stop|restart|status|ensure|watch" >&2
     exit 2
     ;;
 esac
