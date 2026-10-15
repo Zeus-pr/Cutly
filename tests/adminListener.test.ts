@@ -50,8 +50,17 @@ describe(':4001 admin listener', () => {
     const res = await fetch(`${admin}/api/admin/ping`, { headers: { ...secret(), 'cf-ray': 'abc', 'cf-connecting-ip': '1.2.3.4' } });
     expect(res.status).toBe(403);
   });
+  it('/health is unauthenticated and never trips the admin failed-login limit', async () => {
+    for (let i = 0; i < 40; i++) {
+      const res = await fetch(`${admin}/health`);
+      expect(res.status).toBe(200);
+    }
+    // 20 failed unlocks are allowed per 15 min; health checks must not have used any of them.
+    const res = await fetch(`${admin}/api/admin/ping`, { headers: secret() });
+    expect(res.status).not.toBe(429);
+    expect((await fetch(`${admin}/api/admin/ping`)).status).toBe(401);
+  });
   it('non-admin routes → 404', async () => {
-    expect((await fetch(`${admin}/health`)).status).toBe(404);
     expect((await fetch(`${admin}/api/shops`)).status).toBe(404);
   });
 });

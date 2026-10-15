@@ -25,7 +25,7 @@ export function normalizeIndiaPhone(raw: string): string | null {
 
 /** T2: keyed HMAC-SHA256 (IP_HASH_KEY, falling back to PHONE_HASH_KEY), 32 hex. Old rows keep unkeyed hashes. */
 export function hashIp(ip: string | null | undefined, key = process.env.IP_HASH_KEY || process.env.PHONE_HASH_KEY || '') {
-  if (!ip) return null;
+  if (!ip || ip === 'unknown') return null;
   if (!key) {
     console.warn('[leads] IP_HASH_KEY not set; storing no ip hash');
     return null;

@@ -110,9 +110,11 @@ export function getClientIp(req: ReqLike, list?: BlockList): string {
 }
 
 /** Rate-limit bucket: IPv4 as-is, IPv6 by /64 (one subscriber usually owns a /64). */
-export function rateLimitIpKey(ip: string) {
+export function rateLimitIpKey(raw: string) {
+  // Normalise first so ::ffff:a.b.c.d shares the IPv4 bucket.
+  const ip = normalizeIp(raw) || raw;
   if (isIP(ip) !== 6) return ip;
-  const canon = normalizeIp(ip) || ip;
+  const canon = ip;
   const [head, tail = ''] = canon.split('::');
   const h = head ? head.split(':') : [];
   const t = tail ? tail.split(':') : [];

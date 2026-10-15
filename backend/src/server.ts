@@ -849,6 +849,8 @@ adminApp.use((req, res, next) => {
   }
   next();
 });
+// Unauthenticated liveness for scripts/cutly-api.sh. Never touches the admin rate limits.
+adminApp.get('/health', (_req, res) => res.json({ status: 'ok', service: 'cutly-admin' }));
 adminApp.use((req, res, next) => (isAdminPath(req.path) ? next() : notFound(req, res)));
 adminApp.use(
   cors({
@@ -881,7 +883,10 @@ app.post('/api/public/partner-leads', async (req, res) => {
     createPartnerLead({
       ...parsed.data,
       userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
-      ip: getClientIp(req)
+      ip: (() => {
+        const ip = getClientIp(req);
+        return ip === 'unknown' ? null : ip;
+      })()
     })
   );
 });

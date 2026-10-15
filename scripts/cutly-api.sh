@@ -10,7 +10,7 @@ PIDFILE="$RUN/cutly-api.pid"
 PORT=4000
 # T2: admin routes live on a separate loopback-only listener.
 ADMIN_PORT=4001
-ADMIN_HEALTH="http://127.0.0.1:${ADMIN_PORT}/api/admin/ping"
+ADMIN_HEALTH="http://127.0.0.1:${ADMIN_PORT}/health"
 HEALTH="http://127.0.0.1:${PORT}/health"
 SERVER="$ROOT/backend/src/main.ts"
 
@@ -27,10 +27,8 @@ mkdir -p "$RUN"
 
 health_ok() {
   curl -sf --max-time 2 "$HEALTH" >/dev/null 2>&1 || return 1
-  # Admin listener answers 401/503 without the secret — any HTTP reply means it is up.
-  local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$ADMIN_HEALTH" 2>/dev/null || true)"
-  [[ -n "$code" && "$code" != "000" ]]
+  # Unauthenticated /health on the admin listener (never counts toward admin login limits).
+  curl -sf --max-time 2 "$ADMIN_HEALTH" >/dev/null 2>&1
 }
 
 admin_listener_pid() {

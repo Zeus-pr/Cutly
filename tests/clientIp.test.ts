@@ -59,6 +59,8 @@ describe('rate-limit keys', () => {
     expect(rateLimitIpKey('2001:db8:1:2:aaaa::1')).toBe('2001:db8:1:2::/64');
     expect(rateLimitIpKey('2001:db8:1:2:ffff:1:2:3')).toBe('2001:db8:1:2::/64');
     expect(rateLimitIpKey('203.0.113.7')).toBe('203.0.113.7');
+    expect(rateLimitIpKey('::ffff:203.0.113.7')).toBe('203.0.113.7');
+    expect(rateLimitIpKey('::FFFF:cb00:7107')).toBe('203.0.113.7');
   });
   it('rotating XFF from one peer hits the same bucket', () => {
     const keys = new Set(
@@ -88,5 +90,6 @@ describe('PartnerLead ipHash', () => {
     expect(a).toMatch(/^[0-9a-f]{32}$/);
     expect(hashIp('203.0.113.7', 'key-two-0123456789')).not.toBe(a);
     expect(hashIp(null, 'k')).toBeNull();
+    expect(hashIp('unknown', 'key-one-0123456789')).toBeNull();
   });
 });
