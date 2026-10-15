@@ -429,6 +429,62 @@ suite('T3 delete account (database)', () => {
     await expect(prisma.$transaction((tx) => assertUserLive(tx, user.id))).rejects.toThrow('Sign in again.');
   });
 
+  it('sec MEDIUM (customer path): delete holding the lock first → booker gets Sign in again, no booking written', async () => {
+    const { Prisma } = await import('@prisma/client');
+    const { assertUserLive, rethrowIfAccountClosing } = await import('../backend/src/customer');
+    const user = await prisma.user.create({ data: { phone: `+9187${String(Date.now()).slice(-8)}` } });
+    const { shop, barber } = await seedShop('m1');
+    let go!: () => void;
+    const locked = new Promise<void>((r) => (go = r));
+    const del = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${user.id} FOR UPDATE`;
+      go();
+      await new Promise((r) => setTimeout(r, 300));
+      await tx.user.update({ where: { id: user.id }, data: { deletionRequestedAt: new Date(), tokenVersion: { increment: 1 } } });
+    });
+    await locked;
+    const book = prisma.$transaction(async (tx) => {
+      await assertUserLive(tx, user.id);
+      await tx.booking.create({ data: {
+        userId: user.id, shopId: shop.id, barberId: barber.id, status: 'CONFIRMED',
+        startsAt: new Date(Date.now() + 86_400_000), endsAt: new Date(Date.now() + 86_400_000 + 1_800_000),
+        totalPaise: 1000, advancePaise: 0, bookingCode: `${tag}-m1`, idempotencyKey: `${tag}-m1` } });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).catch(async (e) => {
+      await rethrowIfAccountClosing(e, user.id);
+      throw e;
+    });
+    await del;
+    await expect(book).rejects.toThrow('Sign in again.');
+    expect(await prisma.booking.count({ where: { userId: user.id } })).toBe(0);
+  });
+
+  it('sec MEDIUM (customer path): real DELETE vs a booker at random offsets never leaves a live booking', async () => {
+    const { Prisma } = await import('@prisma/client');
+    const { assertUserLive, rethrowIfAccountClosing } = await import('../backend/src/customer');
+    for (let round = 0; round < 8; round++) {
+      const user = await prisma.user.create({ data: { phone: `+9186${round}${String(Date.now()).slice(-7)}`, passwordHash: await bcrypt.hash('password123', 4) } });
+      const token = signToken({ id: user.id, email: null, phone: user.phone, name: null }, 'customer', 0);
+      const { shop, barber } = await seedShop(`m2-${round}`);
+      const re = await call('POST', '/api/auth/reauth', { token, body: { password: 'password123' } });
+      const book = (async () => {
+        await new Promise((r) => setTimeout(r, round * 7));
+        return prisma.$transaction(async (tx) => {
+          await assertUserLive(tx, user.id);
+          await new Promise((r) => setTimeout(r, 40));
+          await tx.booking.create({ data: {
+            userId: user.id, shopId: shop.id, barberId: barber.id, status: 'CONFIRMED',
+            startsAt: new Date(Date.now() + 86_400_000), endsAt: new Date(Date.now() + 86_400_000 + 1_800_000),
+            totalPaise: 1000, advancePaise: 0, bookingCode: `${tag}-m2-${round}`, idempotencyKey: `${tag}-m2-${round}` } });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      })().then(() => 'booked', async (e) => { await rethrowIfAccountClosing(e, user.id).catch((x) => { throw x; }); throw e; }).catch((e) => e.message);
+      const del = call('DELETE', '/api/auth/account', { token, reauth: re.body.data.reauthToken });
+      const [b, d] = await Promise.all([book, del]);
+      expect(d.status).toBe(200);
+      expect(['booked', 'Sign in again.']).toContain(b);
+      expect(await prisma.booking.count({ where: { userId: user.id, status: { not: 'CANCELLED' } } })).toBe(0);
+    }
+  }, 30_000);
+
   it('DBA #10: Google sign-in never reclaims the email of a pending-deletion account', async () => {
     const { finishGoogleSignIn } = await import('../backend/src/auth');
     const email = `${tag}-g10@example.com`;

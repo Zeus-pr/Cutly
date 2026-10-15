@@ -25,7 +25,7 @@ import { userFromToken } from './auth';
 import { displayReviewerName } from './accountDeletion';
 import { AppError } from './httpError';
 import { notifyShopPartner, notifyUser } from './push';
-import { SLOT_TAKEN_MESSAGE, throwIfSlotRace } from './race';
+import { isSlotRaceError, SLOT_TAKEN_MESSAGE, throwIfSlotRace } from './race';
 import { barberRatingFromReviews, resolveListService, shopRatingFromReviews } from './shopList';
 import {
   isAtShopCapacity,
@@ -324,6 +324,17 @@ export async function assertUserLive(tx: Prisma.TransactionClient, userId: strin
   const rows = await tx.$queryRaw<{ ok: number }[]>`
     SELECT 1 AS ok FROM "User" WHERE id = ${userId} AND "deletionRequestedAt" IS NULL AND "deletedAt" IS NULL FOR SHARE`;
   if (!rows.length) throw new Error('Sign in again.');
+}
+
+/**
+ * T3 (sec MEDIUM / d): if a hold/book/reschedule lost to a concurrent account delete
+ * (serialization failure on the FOR SHARE), answer 'Sign in again.' instead of 'slot was just taken'.
+ */
+export async function rethrowIfAccountClosing(error: unknown, userId: string) {
+  if (error instanceof Error && error.message === 'Sign in again.') throw error;
+  if (!isSlotRaceError(error)) return;
+  const row = await prisma.user.findUnique({ where: { id: userId }, select: { deletionRequestedAt: true, deletedAt: true } });
+  if (!row || row.deletionRequestedAt || row.deletedAt) throw new Error('Sign in again.');
 }
 
 /** T3-Q9: a CLOSED or purged shop answers 410 SHOP_CLOSED (deep links, favourites). */
@@ -962,6 +973,7 @@ export async function createHold(
       });
     }, txOpts);
   } catch (error) {
+    await rethrowIfAccountClosing(error, user.id);
     if (
       error instanceof Error &&
       (error.message === SLOT_TAKEN_MESSAGE ||
@@ -1184,6 +1196,7 @@ export async function createBooking(token: string, input: {
       return created;
     }, txOpts);
   } catch (error) {
+    await rethrowIfAccountClosing(error, user.id);
     if (error instanceof Error && (
       error.message === SLOT_TAKEN_MESSAGE ||
       error.message.includes('hold expired') ||
@@ -1770,6 +1783,7 @@ export async function rescheduleBooking(
       await tx.bookingHold.delete({ where: { id: hold.id } });
     }, txOpts);
   } catch (error) {
+    await rethrowIfAccountClosing(error, user.id);
     if (error instanceof Error && (
       error.message === SLOT_TAKEN_MESSAGE ||
       error.message === CUSTOMER_OVERLAP_MESSAGE ||
