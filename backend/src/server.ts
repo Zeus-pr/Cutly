@@ -29,6 +29,7 @@ import {
 import { createPartnerLead } from './partnerLeads';
 import {
   deleteCustomerAccount,
+  sendCustomerReauthOtp,
   startCustomerReauth,
   sendPhoneOtp,
   signIn,
@@ -96,7 +97,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead
 } from './notifications';
-import { clientKey, rateLimit } from './rateLimit';
+import { clientKey, rateLimit, sendRateLimited } from './rateLimit';
 import { clientErrorBody, toClientError } from './httpError';
 import { getClientIp, isLoopback, socketIp } from './clientIp';
 export const app = express();
@@ -155,7 +156,7 @@ async function handle(res: express.Response, action: () => Promise<unknown>) {
 app.post('/api/auth/signup', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'signup'), 10, 15 * 60_000);
   if (!limited.ok) {
-    return res.status(429).json({ error: `Too many sign-up attempts. Try again in ${limited.retryAfterSec}s.` });
+    return sendRateLimited(res, limited, 'sign-up attempts');
   }
   const parsed = z
     .object({
@@ -172,14 +173,14 @@ app.post('/api/auth/signup', async (req, res) => {
 });
 app.post('/api/auth/login', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'login'), 20, 15 * 60_000);
-  if (!limited.ok) return res.status(429).json({ error: `Too many login attempts. Try again in ${limited.retryAfterSec}s.` });
+  if (!limited.ok) return sendRateLimited(res, limited, 'login attempts');
   const parsed = z.object({ email: emailSchema, password: z.string().min(1) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter your email and password.' });
   return handle(res, () => signIn(parsed.data.email, parsed.data.password));
 });
 app.post('/api/auth/google', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'google'), 30, 15 * 60_000);
-  if (!limited.ok) return res.status(429).json({ error: `Too many Google attempts. Try again in ${limited.retryAfterSec}s.` });
+  if (!limited.ok) return sendRateLimited(res, limited, 'Google attempts');
   const parsed = z.object({ idToken: z.string().min(20) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Google sign-in did not return a token.' });
   const mergeToken = bearer(req);
@@ -187,14 +188,14 @@ app.post('/api/auth/google', async (req, res) => {
 });
 app.post('/api/auth/otp/send', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'otp-send'), 8, 15 * 60_000);
-  if (!limited.ok) return res.status(429).json({ error: `Too many codes requested. Try again in ${limited.retryAfterSec}s.` });
+  if (!limited.ok) return sendRateLimited(res, limited, 'codes requested');
   const parsed = z.object({ phone: phoneSchema }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter the phone number with the country code, like +9198...' });
   return handle(res, async () => { await sendPhoneOtp(parsed.data.phone); return { sent: true }; });
 });
 app.post('/api/auth/otp/verify', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'otp-verify'), 20, 15 * 60_000);
-  if (!limited.ok) return res.status(429).json({ error: `Too many code checks. Try again in ${limited.retryAfterSec}s.` });
+  if (!limited.ok) return sendRateLimited(res, limited, 'code checks');
   const parsed = z.object({ phone: phoneSchema, code: z.string().regex(/^\d{6}$/) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter the 6-digit code.' });
   const mergeToken = bearer(req);
@@ -210,32 +211,56 @@ const reauthSchema = z.union([
   z.object({ code: z.string().regex(/^\d{6}$/) }).transform((v) => ({ method: 'otp' as const, code: v.code })),
   z.object({ googleIdToken: z.string().min(20) }).transform((v) => ({ method: 'google' as const, idToken: v.googleIdToken }))
 ]);
-async function reauthLimited(req: express.Request, res: express.Response, who: string) {
+/** Returns null when rate limited (429 already sent), else how many tries are left in the window. */
+async function reauthLimited(req: express.Request, res: express.Response, who: string): Promise<number | null> {
   // 5 per session (≈ per user) + a looser 20 per IP so a shared NAT does not lock everyone out.
   const byIp = await rateLimit(clientKey(req, `reauth-${who}`), 20, 15 * 60_000);
   const byToken = await rateLimit(`reauth-${who}-tok:${bearer(req).slice(-24)}`, 5, 15 * 60_000);
   const limited = !byIp.ok ? byIp : !byToken.ok ? byToken : null;
-  if (!limited) return false;
-  res.setHeader('Retry-After', String(limited.retryAfterSec));
-  res.status(429).json({ error: `Too many attempts. Try again in ${limited.retryAfterSec}s.` });
-  return true;
+  if (limited) {
+    sendRateLimited(res, limited, 'attempts');
+    return null;
+  }
+  return Math.min(byIp.remaining ?? 0, byToken.remaining ?? 0);
+}
+
+/** #46: a wrong code/password says how many tries are left before the 429. */
+async function handleReauth(res: express.Response, attemptsRemaining: number, action: () => Promise<unknown>) {
+  try {
+    res.status(200).json({ data: await action() });
+  } catch (error) {
+    const err = toClientError(error);
+    const body = clientErrorBody(err);
+    res.status(err.status).json(err.code === 'REAUTH_FAILED' ? { ...body, attemptsRemaining } : body);
+  }
 }
 app.post('/api/auth/reauth', async (req, res) => {
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
-  if (await reauthLimited(req, res, 'customer')) return;
+  const left = await reauthLimited(req, res, 'customer');
+  if (left === null) return;
   const parsed = reauthSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Confirm with your password, an SMS code, or Google.' });
-  return handle(res, () => startCustomerReauth(token, parsed.data));
+  if (!parsed.success) return res.status(400).json({ error: 'Confirm with your password, an SMS code, or Google.', code: 'REAUTH_BAD_REQUEST' });
+  return handleReauth(res, left, () => startCustomerReauth(token, parsed.data));
+});
+/**
+ * #46: send the re-auth SMS to the signed-in account's own phone. Its own limit (5/session,
+ * 10/IP per 15 min) so it does not share the login send bucket. No phone in the body.
+ */
+app.post('/api/auth/reauth/otp/send', async (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  const byIp = await rateLimit(clientKey(req, 'reauth-otp-send'), 10, 15 * 60_000);
+  const limited = byIp.ok ? await rateLimit(`reauth-otp-send-tok:${token.slice(-24)}`, 5, 15 * 60_000) : byIp;
+  if (!limited.ok) return sendRateLimited(res, limited, 'codes requested');
+  return handle(res, () => sendCustomerReauthOtp(token));
 });
 /** T3: soft delete; requires a one-time X-Reauth-Token from POST /api/auth/reauth. */
 app.delete('/api/auth/account', async (req, res) => {
   // sec LOW: bound account-delete attempts (30/IP, 5/session per 15 min), same shape as reauth.
   const byIp = await rateLimit(clientKey(req, 'account-delete'), 30, 15 * 60_000);
   const limited = byIp.ok ? await rateLimit(`account-delete-tok:${bearer(req).slice(-24)}`, 5, 15 * 60_000) : byIp;
-  if (!limited.ok) {
-    return res.status(429).json({ error: `Too many attempts. Try again in ${limited.retryAfterSec}s.` });
-  }
+  if (!limited.ok) return sendRateLimited(res, limited, 'attempts');
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
   return handle(res, () => deleteCustomerAccount(token, req.header('x-reauth-token')));
@@ -256,7 +281,7 @@ app.post('/api/partner/login', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'partner-login'), 20, 15 * 60_000);
   if (!limited.ok) {
     res.setHeader('Retry-After', String(limited.retryAfterSec));
-    return res.status(429).json({ error: `Too many login attempts. Try again in ${limited.retryAfterSec}s.` });
+    return sendRateLimited(res, limited, 'login attempts');
   }
   const parsed = z.object({ email: emailSchema, password: z.string().min(1) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter your email and password.' });
@@ -511,13 +536,18 @@ app.patch('/api/partner/walk-ins/:id/status', (req, res) => {
 app.post('/api/partner/reauth', async (req, res) => {
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
-  if (await reauthLimited(req, res, 'partner')) return;
+  const left = await reauthLimited(req, res, 'partner');
+  if (left === null) return;
   const parsed = reauthSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Confirm with your password, an SMS code, or Google.' });
-  return handle(res, () => startPartnerReauth(token, parsed.data));
+  if (!parsed.success) return res.status(400).json({ error: 'Confirm with your password, an SMS code, or Google.', code: 'REAUTH_BAD_REQUEST' });
+  return handleReauth(res, left, () => startPartnerReauth(token, parsed.data));
 });
 /** T3: soft delete; requires a one-time X-Reauth-Token from POST /api/partner/reauth. */
-app.delete('/api/partner/account', (req, res) => {
+app.delete('/api/partner/account', async (req, res) => {
+  // #46: same shape as the customer delete limit (30/IP, 5/session per 15 min).
+  const byIp = await rateLimit(clientKey(req, 'partner-account-delete'), 30, 15 * 60_000);
+  const limited = byIp.ok ? await rateLimit(`partner-account-delete-tok:${bearer(req).slice(-24)}`, 5, 15 * 60_000) : byIp;
+  if (!limited.ok) return sendRateLimited(res, limited, 'attempts');
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
   return handle(res, () => deletePartnerAccount(token, req.header('x-reauth-token')));
@@ -641,7 +671,7 @@ app.get('/api/shops/:id/availability', (req, res) => {
 app.post('/api/bookings', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'book'), 30, 15 * 60_000);
   if (!limited.ok) {
-    return res.status(429).json({ error: `Too many booking attempts. Try again in ${limited.retryAfterSec}s.` });
+    return sendRateLimited(res, limited, 'booking attempts');
   }
   const token = bearer(req);
   const parsed = z.object({
@@ -664,7 +694,7 @@ app.post('/api/bookings', async (req, res) => {
 app.post('/api/bookings/:id/confirm-payment', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'pay-confirm'), 40, 15 * 60_000);
   if (!limited.ok) {
-    return res.status(429).json({ error: `Too many payment checks. Try again in ${limited.retryAfterSec}s.` });
+    return sendRateLimited(res, limited, 'payment checks');
   }
   const token = bearer(req);
   const parsed = z
@@ -688,7 +718,7 @@ app.post('/api/bookings/:id/confirm-payment', async (req, res) => {
 app.post('/api/bookings/:id/abandon-payment', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'pay-abandon'), 40, 15 * 60_000);
   if (!limited.ok) {
-    return res.status(429).json({ error: `Too many requests. Try again in ${limited.retryAfterSec}s.` });
+    return sendRateLimited(res, limited, 'requests');
   }
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
@@ -775,7 +805,7 @@ app.post('/api/bookings/:id/review', (req, res) => {
 app.post('/api/bookings/hold', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'hold'), 40, 15 * 60_000);
   if (!limited.ok) {
-    return res.status(429).json({ error: `Too many holds. Try again in ${limited.retryAfterSec}s.` });
+    return sendRateLimited(res, limited, 'holds');
   }
   const token = bearer(req);
   const schema = z
@@ -910,8 +940,7 @@ adminApp.use(notFound);
 app.post('/api/public/partner-leads', async (req, res) => {
   const rl = await rateLimit(clientKey(req, 'partner-lead'), 5, 60 * 60 * 1000);
   if (!rl.ok) {
-    res.setHeader('Retry-After', String(rl.retryAfterSec));
-    return res.status(429).json({ error: 'Too many requests. Try again later.' });
+    return sendRateLimited(res, rl, 'requests');
   }
   const parsed = z
     .object({

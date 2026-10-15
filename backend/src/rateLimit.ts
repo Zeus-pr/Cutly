@@ -2,7 +2,8 @@ import { getClientIp, rateLimitIpKey } from './clientIp';
 import Redis from 'ioredis';
 
 type Bucket = { count: number; resetAt: number };
-type LimitResult = { ok: boolean; retryAfterSec: number };
+/** `remaining` = requests still allowed in this window after this one (#46 attemptsRemaining). */
+export type LimitResult = { ok: boolean; retryAfterSec: number; remaining?: number };
 
 const buckets = new Map<string, Bucket>();
 
@@ -51,20 +52,20 @@ function memoryLimit(key: string, limit: number, windowMs: number): LimitResult 
   const existing = buckets.get(key);
   if (!existing || existing.resetAt <= now) {
     buckets.set(key, { count: 1, resetAt: now + jitteredTtlMs(windowMs) });
-    return { ok: true, retryAfterSec: 0 };
+    return { ok: true, retryAfterSec: 0, remaining: Math.max(0, limit - 1) };
   }
   if (existing.count >= limit) {
-    return { ok: false, retryAfterSec: Math.max(1, Math.ceil((existing.resetAt - now) / 1000)) };
+    return { ok: false, retryAfterSec: Math.max(1, Math.ceil((existing.resetAt - now) / 1000)), remaining: 0 };
   }
   existing.count += 1;
-  return { ok: true, retryAfterSec: 0 };
+  return { ok: true, retryAfterSec: 0, remaining: Math.max(0, limit - existing.count) };
 }
 
 function fromCount(count: number, ttlMs: number, limit: number): LimitResult {
   if (count > limit) {
-    return { ok: false, retryAfterSec: Math.max(1, Math.ceil(Math.max(ttlMs, 1000) / 1000)) };
+    return { ok: false, retryAfterSec: Math.max(1, Math.ceil(Math.max(ttlMs, 1000) / 1000)), remaining: 0 };
   }
-  return { ok: true, retryAfterSec: 0 };
+  return { ok: true, retryAfterSec: 0, remaining: Math.max(0, limit - count) };
 }
 
 /** Fixed window in Redis. New keys get a jittered TTL (not a shared expiry). */
@@ -98,4 +99,29 @@ export async function rateLimit(key: string, limit: number, windowMs: number): P
  */
 export function clientKey(req: Parameters<typeof getClientIp>[0], suffix: string): string {
   return `${suffix}:${rateLimitIpKey(getClientIp(req))}`;
+}
+
+/** "45s" / "3 min" / "1 hr" — human wait for 429 copy (#46: no raw seconds in the app). */
+export function humanWait(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const min = Math.ceil(sec / 60);
+  if (min < 60) return `${min} min`;
+  return `${Math.ceil(min / 60)} hr`;
+}
+
+/**
+ * #46: every 429 carries `code: 'RATE_LIMITED'`, `retryAfterSec` and a Retry-After header,
+ * so the app can show the C6 countdown.
+ */
+export function sendRateLimited(
+  res: { setHeader(name: string, value: string): unknown; status(code: number): { json(body: unknown): unknown } },
+  limited: LimitResult,
+  what = 'attempts'
+) {
+  res.setHeader('Retry-After', String(limited.retryAfterSec));
+  return res.status(429).json({
+    error: `Too many ${what}. Try again in ${humanWait(limited.retryAfterSec)}.`,
+    code: 'RATE_LIMITED',
+    retryAfterSec: limited.retryAfterSec
+  });
 }

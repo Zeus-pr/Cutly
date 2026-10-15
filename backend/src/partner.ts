@@ -99,9 +99,9 @@ export async function partnerFromToken(token: string) {
 async function partnerSignInGate<T extends { id: string; deletionRequestedAt: Date | null; deletedAt: Date | null }>(
   partner: T,
   now = new Date()
-): Promise<boolean> {
+): Promise<false | 'active' | 'restored'> {
   const state = deletionState(partner, now);
-  if (state === 'active') return true;
+  if (state === 'active') return 'active';
   if (state !== 'pending') return false;
   return prisma.$transaction(async (tx) => {
     const restored = await tx.partner.updateMany({
@@ -113,7 +113,7 @@ async function partnerSignInGate<T extends { id: string; deletionRequestedAt: Da
       where: { ownerPartnerId: partner.id, status: 'CLOSED', deletedAt: null },
       data: shopStatusData(deletionFlags().partnerRestoreShopStatus)
     });
-    return true;
+    return 'restored' as const;
   });
 }
 
@@ -136,10 +136,12 @@ export async function partnerSignIn(email: string, password: string) {
   if (!partner?.passwordHash || !(await bcrypt.compare(password, partner.passwordHash))) {
     throw new Error('Email or password is incorrect.');
   }
-  if (!(await partnerSignInGate(partner))) throw new Error('Email or password is incorrect.');
+  const gate = await partnerSignInGate(partner);
+  if (!gate) throw new Error('Email or password is incorrect.');
   const profile = publicPartner(partner);
   const shop = await shopFor(partner.id);
-  return { token: signToken(profile, 'partner', partner.tokenVersion), partner: profile, shop };
+  // #46: `restored` lets the app show the P3 "Welcome back" banner once.
+  return { token: signToken(profile, 'partner', partner.tokenVersion), partner: profile, shop, restored: gate === 'restored' };
 }
 
 async function shopFor(partnerId: string) {
@@ -1623,7 +1625,11 @@ async function deletePartnerTx(partnerId: string, reauthToken: string | null | u
       await tx.shop.update({ where: { id: shop.id }, data: shopStatusData('CLOSED') });
       const live = await tx.booking.findMany({
         where: { shopId: shop.id, status: { in: [...PARTNER_BLOCKING_STATUSES] } },
-        select: { id: true, bookingCode: true, startsAt: true, endsAt: true, status: true },
+        select: {
+          id: true, bookingCode: true, startsAt: true, endsAt: true, status: true,
+          user: { select: { name: true, phone: true, deletionRequestedAt: true, deletedAt: true } },
+          services: { select: { service: { select: { name: true } } } }
+        },
         orderBy: { startsAt: 'asc' }
       });
       const blocking = live.filter((row) => blocksPartnerDelete(row, now));
@@ -1632,7 +1638,11 @@ async function deletePartnerTx(partnerId: string, reauthToken: string | null | u
           bookings: blocking.map((row) => ({
             id: row.id,
             bookingCode: row.bookingCode,
-            startsAt: row.startsAt.toISOString()
+            startsAt: row.startsAt.toISOString(),
+            status: row.status,
+            // #46: names for the app's P2 list (same masking as Floor).
+            customerName: displayCustomerName(row.user),
+            serviceNames: row.services.map((s) => s.service.name)
           }))
         });
       }

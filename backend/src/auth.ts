@@ -31,7 +31,12 @@ export type PublicUser = {
   dateOfBirth?: string | null;
   inviteCode?: string | null;
   googleLinked?: boolean;
+  /** #46: lets the app pick the re-auth method (C2 OTP / C4 Google / C5 password). */
+  hasPassword?: boolean;
+  authMethods?: AuthMethod[];
 };
+
+export type AuthMethod = 'phone' | 'password' | 'google';
 
 /** Fail closed if JWT_SECRET missing (SEC-10). */
 export function jwtSecret() {
@@ -55,7 +60,12 @@ function publicUser(user: {
   dateOfBirth?: Date | null;
   inviteCode?: string | null;
   googleSub?: string | null;
+  passwordHash?: string | null;
 }): PublicUser {
+  const authMethods: AuthMethod[] = [];
+  if (user.phone) authMethods.push('phone');
+  if (user.passwordHash) authMethods.push('password');
+  if (user.googleSub) authMethods.push('google');
   return {
     id: user.id,
     email: user.email,
@@ -64,7 +74,9 @@ function publicUser(user: {
     gender: user.gender ?? null,
     dateOfBirth: dateOnly(user.dateOfBirth),
     inviteCode: user.inviteCode ?? null,
-    googleLinked: Boolean(user.googleSub)
+    googleLinked: Boolean(user.googleSub),
+    hasPassword: Boolean(user.passwordHash),
+    authMethods
   };
 }
 
@@ -94,9 +106,13 @@ export function tokenVersionMatches(payload: object, tokenVersion: number) {
   return tv === tokenVersion;
 }
 
-function session(user: User) {
+/** #46: rows that signInGate just brought back from a pending deletion. */
+const restoredRows = new WeakSet<User>();
+
+function session(user: User, restored = restoredRows.has(user)) {
   const profile = publicUser(user);
-  return { token: signToken(profile, 'customer', user.tokenVersion), user: profile };
+  // `restored: true` only on the sign-in that cancelled a pending deletion (app shows C9 once).
+  return { token: signToken(profile, 'customer', user.tokenVersion), user: profile, restored };
 }
 
 export const ACCOUNT_PENDING_DELETION = () =>
@@ -116,7 +132,9 @@ async function signInGate(user: User, now = new Date()): Promise<User | null> {
     data: { deletionRequestedAt: null }
   });
   if (restored.count !== 1) return null;
-  return prisma.user.findUnique({ where: { id: user.id } });
+  const row = await prisma.user.findUnique({ where: { id: user.id } });
+  if (row) restoredRows.add(row);
+  return row;
 }
 
 /** SEC-08: same message for email/phone taken — no account enumeration. */
@@ -481,9 +499,11 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
   const bySub = subRow;
   let emailRows = email ? await findUsersByEmail(email) : [];
   const pendingOwner = emailRows.find((row) => isDeletionRequested(row));
+  let restoredOwnerId: string | null = null;
   if (pendingOwner) {
     const sameGoogle = !pendingOwner.googleSub || pendingOwner.googleSub === googleSub;
     if (!bySub && pendingOwner.emailVerified && sameGoogle && (await signInGate(pendingOwner))) {
+      restoredOwnerId = pendingOwner.id;
       emailRows = email ? await findUsersByEmail(email) : [];
     } else {
       throw new Error(GOOGLE_SIGN_IN_FAILED);
@@ -536,7 +556,7 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
       }
     });
   });
-  return session(user);
+  return session(user, user.id === restoredOwnerId);
 }
 
 let verifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID || '';
@@ -654,6 +674,14 @@ export async function startCustomerReauth(token: string, input: ReauthInput) {
   await verifyReauthProof(user, input, { checkOtp: checkPhoneOtpCode, verifyGoogle: defaultVerifyGoogle });
   if (input.method === 'otp' && user.phone) await prisma.phoneOtp.deleteMany({ where: { phone: user.phone } });
   return issueReauthToken(prisma, secret(), user.id, 'customer');
+}
+
+/** #46: re-auth SMS to the signed-in account's own phone (never a phone from the request). */
+export async function sendCustomerReauthOtp(token: string) {
+  const current = await userFromToken(token);
+  if (!current.phone) throw new AppError('This account has no phone. Use another way to confirm.', 400, 'REAUTH_NO_PHONE');
+  await sendPhoneOtp(current.phone);
+  return { sent: true as const, phoneLast4: current.phone.slice(-4) };
 }
 
 /**
