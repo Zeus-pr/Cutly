@@ -48,6 +48,19 @@ start_api() {
     echo "Missing tsx — run npm install in $ROOT" >&2
     exit 1
   fi
+  # Keep the generated Prisma client in sync with schema.prisma (after git pull / merges).
+  # A stale client makes queries on new columns throw (e.g. Shop.status after T3).
+  # Migrations are NOT applied here: run `npx prisma migrate deploy` deliberately.
+  local PRISMA_CLI="$ROOT/node_modules/prisma/build/index.js"
+  if [[ -f "$PRISMA_CLI" ]]; then
+    if ! (cd "$ROOT" && "$NODE" "$PRISMA_CLI" generate >>"$LOG" 2>&1); then
+      echo "prisma generate failed — see $LOG" >&2
+      exit 1
+    fi
+  else
+    echo "Missing prisma CLI — run npm install in $ROOT" >&2
+    exit 1
+  fi
   # SEC-01: never write the weak documented default. Generate a strong secret if missing.
   if ! grep -q '^ADMIN_SECRET=' "$ROOT/.env" 2>/dev/null; then
     local gen
