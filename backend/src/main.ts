@@ -7,11 +7,20 @@ import type { Server } from 'node:http';
 import { adminApp, app } from './server';
 import { paymentsEnabled } from './razorpay';
 import { startAwaitingExpirySweep } from './awaitingExpiry';
+import { startAccountPurgeSweep } from './accountPurge';
+import { phoneHashKey } from './accountDeletion';
 import { resolveListenConfig } from './listenConfig';
 
 function fail(message: string, error?: unknown): never {
   console.error(`[startup] ${message}`, error ?? '');
   process.exit(1);
+}
+
+// T3: without PHONE_HASH_KEY every purge would fail and PII would outlive the 14-day promise.
+try {
+  phoneHashKey();
+} catch (error) {
+  fail(error instanceof Error ? error.message : 'PHONE_HASH_KEY is invalid', error);
 }
 
 let cfg: ReturnType<typeof resolveListenConfig>;
@@ -33,5 +42,7 @@ const adminServer = adminApp.listen(cfg.adminPort, cfg.adminHost, () => {
   listen(api, `API ${cfg.host}:${cfg.port}`);
   // Auto-expire missed AWAITING_SHOP while API is awake; expire-on-read covers app open.
   startAwaitingExpirySweep(60_000);
+  // T3: anonymise accounts past the deletion grace window (single runner via advisory lock).
+  startAccountPurgeSweep(60 * 60_000);
 });
 listen(adminServer, `Admin ${cfg.adminHost}:${cfg.adminPort}`);

@@ -1,7 +1,20 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { BookingStatus, Prisma, PrismaClient, ShopKind } from '@prisma/client';
-import { jwtSecret, signToken } from './auth';
+import { checkPhoneOtpCode, jwtSecret, signToken, tokenVersionMatches } from './auth';
+import {
+  PARTNER_BLOCKING_STATUSES,
+  blocksPartnerDelete,
+  deletionDeadline,
+  deletionFlags,
+  deletionState,
+  displayCustomerName,
+  displayCustomerPhone,
+  isDeletionRequested,
+  shopStatusData
+} from './accountDeletion';
+import { AppError } from './httpError';
+import { consumeReauthToken, defaultVerifyGoogle, issueReauthToken, verifyReauthProof, type ReauthInput } from './reauth';
 import {
   assertTransition,
   assertPartnerTransition,
@@ -74,17 +87,48 @@ export async function partnerFromToken(token: string) {
   if (payload.aud !== 'partner' || typeof payload.sub !== 'string') throw new Error('Sign in again.');
   const partner = await prisma.partner.findUnique({ where: { id: payload.sub } });
   if (!partner) throw new Error('Sign in again.');
+  // T3: deletion requested or token issued before a revocation.
+  if (isDeletionRequested(partner) || !tokenVersionMatches(payload, partner.tokenVersion ?? 0)) throw new Error('Sign in again.');
   return publicPartner(partner);
+}
+
+/**
+ * T3-Q11: partner sign-in inside the grace window restores the account; the shop goes
+ * CLOSED → PAUSED (never straight to ACTIVE). Past the deadline: null (generic failure).
+ */
+async function partnerSignInGate<T extends { id: string; deletionRequestedAt: Date | null; deletedAt: Date | null }>(
+  partner: T,
+  now = new Date()
+): Promise<boolean> {
+  const state = deletionState(partner, now);
+  if (state === 'active') return true;
+  if (state !== 'pending') return false;
+  return prisma.$transaction(async (tx) => {
+    const restored = await tx.partner.updateMany({
+      where: { id: partner.id, deletedAt: null, deletionRequestedAt: partner.deletionRequestedAt },
+      data: { deletionRequestedAt: null }
+    });
+    if (restored.count !== 1) return false;
+    await tx.shop.updateMany({
+      where: { ownerPartnerId: partner.id, status: 'CLOSED', deletedAt: null },
+      data: shopStatusData(deletionFlags().partnerRestoreShopStatus)
+    });
+    return true;
+  });
 }
 
 export async function partnerSignUp(email: string, password: string, name?: string) {
   const existing = await prisma.partner.findUnique({ where: { email } });
+  // Same rule as customer sign-up (T3-Q6): in grace → tell them to sign in, which restores.
+  if (existing && deletionState(existing) === 'pending') {
+    throw new AppError('This account is pending deletion. Sign in to restore it.', 409, 'ACCOUNT_PENDING_DELETION');
+  }
   if (existing) throw new Error('A partner account with that email already exists.');
   const partner = await prisma.partner.create({
     data: { email, name: name || null, passwordHash: await bcrypt.hash(password, 10) }
   });
   const profile = publicPartner(partner);
-  return { token: signToken(profile, 'partner'), partner: profile, shop: null };
+  return { token: signToken(profile, 'partner', partner.tokenVersion), partner: profile, shop: null };
 }
 
 export async function partnerSignIn(email: string, password: string) {
@@ -92,9 +136,10 @@ export async function partnerSignIn(email: string, password: string) {
   if (!partner?.passwordHash || !(await bcrypt.compare(password, partner.passwordHash))) {
     throw new Error('Email or password is incorrect.');
   }
+  if (!(await partnerSignInGate(partner))) throw new Error('Email or password is incorrect.');
   const profile = publicPartner(partner);
   const shop = await shopFor(partner.id);
-  return { token: signToken(profile, 'partner'), partner: profile, shop };
+  return { token: signToken(profile, 'partner', partner.tokenVersion), partner: profile, shop };
 }
 
 async function shopFor(partnerId: string) {
@@ -129,6 +174,7 @@ async function shopFor(partnerId: string) {
     productBrands: shop.productBrands || [],
     chairCount: shop.chairCount,
     setupDone: shop.setupDone,
+    status: shop.status,
     acceptingAppointments: shop.acceptingAppointments,
     acceptingPausedUntil: shop.acceptingPausedUntil?.toISOString() ?? null,
     amenities: shop.amenities,
@@ -255,9 +301,11 @@ export async function setupShop(token: string, input: {
     setupDone: true,
     ownerPartnerId: partner.id
   };
+  // DBA #9: this is the only place shops are created. New shops start ACTIVE with isActive in
+  // sync; re-running setup on an existing shop never changes its lifecycle status.
   const shop = owned
     ? await prisma.shop.update({ where: { id: owned.id }, data })
-    : await prisma.shop.create({ data });
+    : await prisma.shop.create({ data: { ...data, ...shopStatusData('ACTIVE') } });
   await prisma.shopService.deleteMany({ where: { shopId: shop.id } });
   await ensureServiceCategories();
   for (const item of input.services) {
@@ -689,7 +737,7 @@ function mapFloorVisit(row: {
   totalPaise: number;
   advancePaise: number;
   shopId?: string;
-  user: { name: string | null; phone?: string | null };
+  user: { name: string | null; phone?: string | null; deletionRequestedAt?: Date | null; deletedAt?: Date | null };
   barber: { id: string; name: string };
   services: { serviceId?: string; service: { name: string } }[];
   payment?: { amountPaise: number; status: string; shopSettledAt?: Date | null } | null;
@@ -704,8 +752,8 @@ function mapFloorVisit(row: {
     status: row.status,
     startsAt: row.startsAt.toISOString(),
     endsAt: row.endsAt.toISOString(),
-    name: row.user.name || 'Customer',
-    phone: row.user.phone || null,
+    name: displayCustomerName(row.user),
+    phone: displayCustomerPhone(row.user),
     service: row.services.map((item) => item.service.name).join(', ') || 'Appointment',
     serviceId: row.services[0]?.serviceId || null,
     shopId: row.shopId || null,
@@ -771,7 +819,7 @@ function mapRequestRow(row: {
   endsAt: Date;
   totalPaise: number;
   advancePaise: number;
-  user: { name: string | null; phone: string | null };
+  user: { name: string | null; phone: string | null; deletionRequestedAt?: Date | null; deletedAt?: Date | null };
   barber: { id: string; name: string };
   services: { service: { name: string } }[];
 }) {
@@ -781,8 +829,8 @@ function mapRequestRow(row: {
     status: row.status,
     startsAt: row.startsAt.toISOString(),
     endsAt: row.endsAt.toISOString(),
-    name: row.user.name || 'Customer',
-    phone: row.user.phone || null,
+    name: displayCustomerName(row.user),
+    phone: displayCustomerPhone(row.user),
     service: row.services.map((item) => item.service.name).join(', ') || 'Appointment',
     barberName: row.barber.name,
     barberId: row.barber.id,
@@ -934,7 +982,7 @@ export async function partnerDashboard(token: string) {
     next: upcoming
       ? {
           id: upcoming.id,
-          name: upcoming.user.name || 'Customer',
+          name: displayCustomerName(upcoming.user),
           service: upcoming.services.map((item) => item.service.name).join(', ') || 'Appointment',
           startsAt: upcoming.startsAt.toISOString(),
           status: upcoming.status
@@ -1023,7 +1071,7 @@ export async function respondToBookingRequest(
     status: updated.status,
     startsAt: updated.startsAt.toISOString(),
     endsAt: updated.endsAt.toISOString(),
-    name: updated.user.name || 'Customer',
+    name: displayCustomerName(updated.user),
     service: serviceName,
     barberName: updated.barber.name,
     barberId: updated.barberId,
@@ -1059,7 +1107,7 @@ function mapHistoryRow(row: {
   endsAt: Date;
   totalPaise: number;
   advancePaise: number;
-  user: { name: string | null; phone: string | null };
+  user: { name: string | null; phone: string | null; deletionRequestedAt?: Date | null; deletedAt?: Date | null };
   barber: { id: string; name: string };
   services: { service: { name: string }; pricePaise: number }[];
   payment: { status: string; amountPaise: number; shopSettledAt: Date | null } | null;
@@ -1076,8 +1124,8 @@ function mapHistoryRow(row: {
     statusLabel: partnerHistoryStatusLabel(row.status),
     startsAt: row.startsAt.toISOString(),
     endsAt: row.endsAt.toISOString(),
-    name: row.user.name || 'Customer',
-    phone: row.user.phone || null,
+    name: displayCustomerName(row.user),
+    phone: displayCustomerPhone(row.user),
     service: row.services.map((item) => item.service.name).join(', ') || 'Appointment',
     barberName: row.barber.name,
     barberId: row.barber.id,
@@ -1524,23 +1572,75 @@ export async function savePartnerPushToken(token: string, pushToken: string) {
   return { saved: true as const };
 }
 
-export async function deletePartnerAccount(token: string) {
-  const partner = await partnerFromToken(token);
-  const shop = await prisma.shop.findUnique({ where: { ownerPartnerId: partner.id } });
-  if (shop) {
-    const bookings = await prisma.booking.findMany({ where: { shopId: shop.id }, select: { id: true } });
-    const ids = bookings.map((row) => row.id);
-    if (ids.length) {
-      await prisma.review.deleteMany({ where: { bookingId: { in: ids } } });
-      await prisma.bookingPayment.deleteMany({ where: { bookingId: { in: ids } } });
-      await prisma.bookingService.deleteMany({ where: { bookingId: { in: ids } } });
-      await prisma.booking.deleteMany({ where: { id: { in: ids } } });
-    }
-    await prisma.review.deleteMany({ where: { shopId: shop.id } });
-    await prisma.favouriteShop.deleteMany({ where: { shopId: shop.id } });
-    await prisma.bookingHold.deleteMany({ where: { shopId: shop.id } });
-    await prisma.shop.delete({ where: { id: shop.id } });
+/** T3 step-up: POST /api/partner/reauth → one-time 5-minute token for DELETE /api/partner/account. */
+export async function startPartnerReauth(token: string, input: ReauthInput) {
+  const current = await partnerFromToken(token);
+  const partner = await prisma.partner.findUniqueOrThrow({ where: { id: current.id } });
+  await verifyReauthProof(partner, input, { checkOtp: checkPhoneOtpCode, verifyGoogle: defaultVerifyGoogle });
+  return issueReauthToken(prisma, jwtSecret(), partner.id, 'partner');
+}
+
+/**
+ * T3 partner soft delete. Never deletes the shop, its bookings, payments or reviews.
+ * - Product flag PARTNER_SELF_DELETE_ENABLED (default on); off → 403 PARTNER_DELETE_OPS_ONLY.
+ * - Any upcoming/in-progress booking → 409 UPCOMING_BOOKINGS with the list (no auto-cancel).
+ * - Serializable transaction that closes the shop first, then re-checks bookings, so a
+ *   racing booking either fails (shop no longer ACTIVE) or this returns 409.
+ * - Partner: deletionRequestedAt, tokenVersion++, pushToken null. PII stays until purge.
+ */
+/** Postgres serialization failure / Prisma write conflict (P2034) → a concurrent hold or booking won. */
+export function isSerializationConflict(error: unknown) {
+  const e = error as { code?: string; meta?: { code?: string }; message?: string };
+  return e?.code === 'P2034' || e?.meta?.code === '40001' || /could not serialize|40001|write conflict/i.test(e?.message || '');
+}
+
+export async function deletePartnerAccount(token: string, reauthToken?: string | null, now = new Date()) {
+  const current = await partnerFromToken(token);
+  if (!deletionFlags().partnerSelfDelete) {
+    throw new AppError('Ask CutLy support to close your partner account.', 403, 'PARTNER_DELETE_OPS_ONLY');
   }
-  await prisma.partner.delete({ where: { id: partner.id } });
-  return { deleted: true };
+  try {
+    await deletePartnerTx(current.id, reauthToken, now);
+  } catch (error) {
+    if (isSerializationConflict(error)) {
+      throw new AppError('A customer is booking right now. Try again in a moment.', 409, 'PARTNER_DELETE_CONFLICT');
+    }
+    throw error;
+  }
+  return {
+    deleted: true as const,
+    deletionRequestedAt: now.toISOString(),
+    restoreBefore: deletionDeadline(now).toISOString()
+  };
+}
+
+async function deletePartnerTx(partnerId: string, reauthToken: string | null | undefined, now: Date) {
+  const current = { id: partnerId };
+  await prisma.$transaction(async (tx) => {
+    await consumeReauthToken(tx, jwtSecret(), reauthToken, current.id, 'partner', now);
+    const shop = await tx.shop.findUnique({ where: { ownerPartnerId: current.id } });
+    if (shop) {
+      await tx.shop.update({ where: { id: shop.id }, data: shopStatusData('CLOSED') });
+      const live = await tx.booking.findMany({
+        where: { shopId: shop.id, status: { in: [...PARTNER_BLOCKING_STATUSES] } },
+        select: { id: true, bookingCode: true, startsAt: true, endsAt: true, status: true },
+        orderBy: { startsAt: 'asc' }
+      });
+      const blocking = live.filter((row) => blocksPartnerDelete(row, now));
+      if (blocking.length) {
+        throw new AppError('Finish or cancel your upcoming bookings first.', 409, 'UPCOMING_BOOKINGS', {
+          bookings: blocking.map((row) => ({
+            id: row.id,
+            bookingCode: row.bookingCode,
+            startsAt: row.startsAt.toISOString()
+          }))
+        });
+      }
+      await tx.bookingHold.deleteMany({ where: { shopId: shop.id } });
+    }
+    await tx.partner.update({
+      where: { id: current.id },
+      data: { deletionRequestedAt: now, tokenVersion: { increment: 1 }, pushToken: null }
+    });
+  }, txOpts);
 }

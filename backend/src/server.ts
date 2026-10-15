@@ -29,6 +29,7 @@ import {
 import { createPartnerLead } from './partnerLeads';
 import {
   deleteCustomerAccount,
+  startCustomerReauth,
   sendPhoneOtp,
   signIn,
   signInWithGoogle,
@@ -54,6 +55,7 @@ import {
   setPartnerHours,
   setupShop,
   startBookingWithVerifyPin,
+  startPartnerReauth,
   updateAmenities,
   updateBarbers,
   updateFloor,
@@ -95,7 +97,7 @@ import {
   markNotificationRead
 } from './notifications';
 import { clientKey, rateLimit } from './rateLimit';
-import { toClientError } from './httpError';
+import { clientErrorBody, toClientError } from './httpError';
 import { getClientIp, isLoopback, socketIp } from './clientIp';
 export const app = express();
 // T2: never derive req.ip from X-Forwarded-For. Use getClientIp(req) instead.
@@ -146,8 +148,8 @@ async function handle(res: express.Response, action: () => Promise<unknown>) {
   try {
     res.status(200).json({ data: await action() });
   } catch (error) {
-    const { status, message } = toClientError(error);
-    res.status(status).json({ error: message });
+    const err = toClientError(error);
+    res.status(err.status).json(clientErrorBody(err));
   }
 }
 app.post('/api/auth/signup', async (req, res) => {
@@ -202,10 +204,41 @@ function bearer(req: express.Request) {
   const header = req.header('authorization') || '';
   return header.startsWith('Bearer ') ? header.slice(7) : '';
 }
-app.delete('/api/auth/account', (req, res) => {
+/** T3 step-up proof: { password } | { code } (SMS to the account's own phone) | { googleIdToken }. */
+const reauthSchema = z.union([
+  z.object({ password: z.string().min(1).max(200) }).transform((v) => ({ method: 'password' as const, password: v.password })),
+  z.object({ code: z.string().regex(/^\d{6}$/) }).transform((v) => ({ method: 'otp' as const, code: v.code })),
+  z.object({ googleIdToken: z.string().min(20) }).transform((v) => ({ method: 'google' as const, idToken: v.googleIdToken }))
+]);
+async function reauthLimited(req: express.Request, res: express.Response, who: string) {
+  // 5 per session (≈ per user) + a looser 20 per IP so a shared NAT does not lock everyone out.
+  const byIp = await rateLimit(clientKey(req, `reauth-${who}`), 20, 15 * 60_000);
+  const byToken = await rateLimit(`reauth-${who}-tok:${bearer(req).slice(-24)}`, 5, 15 * 60_000);
+  const limited = !byIp.ok ? byIp : !byToken.ok ? byToken : null;
+  if (!limited) return false;
+  res.setHeader('Retry-After', String(limited.retryAfterSec));
+  res.status(429).json({ error: `Too many attempts. Try again in ${limited.retryAfterSec}s.` });
+  return true;
+}
+app.post('/api/auth/reauth', async (req, res) => {
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
-  return handle(res, () => deleteCustomerAccount(token));
+  if (await reauthLimited(req, res, 'customer')) return;
+  const parsed = reauthSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Confirm with your password, an SMS code, or Google.' });
+  return handle(res, () => startCustomerReauth(token, parsed.data));
+});
+/** T3: soft delete; requires a one-time X-Reauth-Token from POST /api/auth/reauth. */
+app.delete('/api/auth/account', async (req, res) => {
+  // sec LOW: bound account-delete attempts (30/IP, 5/session per 15 min), same shape as reauth.
+  const byIp = await rateLimit(clientKey(req, 'account-delete'), 30, 15 * 60_000);
+  const limited = byIp.ok ? await rateLimit(`account-delete-tok:${bearer(req).slice(-24)}`, 5, 15 * 60_000) : byIp;
+  if (!limited.ok) {
+    return res.status(429).json({ error: `Too many attempts. Try again in ${limited.retryAfterSec}s.` });
+  }
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  return handle(res, () => deleteCustomerAccount(token, req.header('x-reauth-token')));
 });
 app.get('/api/auth/me', (req, res) => {
   const token = bearer(req);
@@ -475,10 +508,19 @@ app.patch('/api/partner/walk-ins/:id/status', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Pick Done or Cancel.' });
   return handle(res, () => updatePartnerWalkInStatus(token, req.params.id, parsed.data.status));
 });
+app.post('/api/partner/reauth', async (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  if (await reauthLimited(req, res, 'partner')) return;
+  const parsed = reauthSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Confirm with your password, an SMS code, or Google.' });
+  return handle(res, () => startPartnerReauth(token, parsed.data));
+});
+/** T3: soft delete; requires a one-time X-Reauth-Token from POST /api/partner/reauth. */
 app.delete('/api/partner/account', (req, res) => {
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
-  return handle(res, () => deletePartnerAccount(token));
+  return handle(res, () => deletePartnerAccount(token, req.header('x-reauth-token')));
 });
 app.patch('/api/auth/profile', (req, res) => {
   const token = bearer(req);

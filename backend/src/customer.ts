@@ -22,8 +22,10 @@ import {
 } from './hours';
 import { assertDateKeyIST, addDaysKeyIST, dayRangeIST, formatIST, todayKeyIST } from './ist';
 import { userFromToken } from './auth';
+import { displayReviewerName } from './accountDeletion';
+import { AppError } from './httpError';
 import { notifyShopPartner, notifyUser } from './push';
-import { SLOT_TAKEN_MESSAGE, throwIfSlotRace } from './race';
+import { isSlotRaceError, SLOT_TAKEN_MESSAGE, throwIfSlotRace } from './race';
 import { barberRatingFromReviews, resolveListService, shopRatingFromReviews } from './shopList';
 import {
   isAtShopCapacity,
@@ -216,10 +218,19 @@ export async function listNearbyShops(input: {
     .split(',')
     .map((h) => h.trim().toLowerCase())
     .filter(Boolean);
+  // DBA #6: bounding box first so Postgres can use Shop_active_lat_lng_idx; the exact
+  // haversine radius filter still runs below.
+  // sec (c): 111.19 km/deg matches the haversine Earth radius (6371 km), plus 1% margin; the
+  // longitude span uses the latitude edge nearest the pole, so the box always covers the circle.
+  const dLat = (radius / 111.19) * 1.01;
+  const edgeLat = Math.min(89.9, Math.abs(lat) + dLat);
+  const dLng = dLat / Math.max(0.001, Math.cos((edgeLat * Math.PI) / 180));
   const rows = await prisma.shop.findMany({
     where: {
       setupDone: true,
-      isActive: true,
+      status: 'ACTIVE',
+      latitude: { gte: lat - dLat, lte: lat + dLat },
+      longitude: { gte: lng - dLng, lte: lng + dLng },
       ...(kindSet.length
         ? {
             OR: [
@@ -307,15 +318,47 @@ export async function shopHours(id: string) {
   return getPublicShopHours(prisma, id);
 }
 
+/**
+ * T3 (DBA #5): pairs with the FOR UPDATE in deleteCustomerAccount. A hold/book/reschedule
+ * either commits before the delete request (and its booking is then cancelled by it), or
+ * sees deletionRequestedAt set and fails here. No new booking can slip in after the request.
+ */
+export async function assertUserLive(tx: Prisma.TransactionClient, userId: string) {
+  const rows = await tx.$queryRaw<{ ok: number }[]>`
+    SELECT 1 AS ok FROM "User" WHERE id = ${userId} AND "deletionRequestedAt" IS NULL AND "deletedAt" IS NULL FOR SHARE`;
+  if (!rows.length) throw new Error('Sign in again.');
+}
+
+/**
+ * T3 (sec MEDIUM / d): if a hold/book/reschedule lost to a concurrent account delete
+ * (serialization failure on the FOR SHARE), answer 'Sign in again.' instead of 'slot was just taken'.
+ */
+export async function rethrowIfAccountClosing(error: unknown, userId: string) {
+  if (error instanceof Error && error.message === 'Sign in again.') throw error;
+  if (!isSlotRaceError(error)) return;
+  const row = await prisma.user.findUnique({ where: { id: userId }, select: { deletionRequestedAt: true, deletedAt: true } });
+  if (!row || row.deletionRequestedAt || row.deletedAt) throw new Error('Sign in again.');
+}
+
+/** T3-Q9: a CLOSED or purged shop answers 410 SHOP_CLOSED (deep links, favourites). */
+export const SHOP_CLOSED = () => new AppError('This shop is no longer taking bookings.', 410, 'SHOP_CLOSED');
+
+async function throwShopMissing(id: string): Promise<never> {
+  const row = await prisma.shop.findUnique({ where: { id }, select: { status: true, deletedAt: true } });
+  if (row && (row.status === 'CLOSED' || row.deletedAt)) throw SHOP_CLOSED();
+  throw new Error('Shop not found.');
+}
+
 export async function getShop(id: string, origin?: { lat: number; lng: number }) {
   const shop = await prisma.shop.findFirst({
-    where: { id, setupDone: true, isActive: true },
+    where: { id, setupDone: true, status: 'ACTIVE' },
     include: {
       images: { orderBy: { sortOrder: 'asc' }, take: 8 },
       services: { include: { service: true } },
       reviews: { select: { rating: true } }
     }
   });
+  if (!shop) await throwShopMissing(id);
   if (!shop) throw new Error('Shop not found.');
   const openById = await loadOpenStatusForShops(prisma, [shop.id]);
   const resolved = resolveListService(shop.services);
@@ -375,14 +418,15 @@ export async function shopBarbers(shopId: string) {
 }
 
 export async function listShopReviews(shopId: string) {
-  const shop = await prisma.shop.findFirst({ where: { id: shopId, setupDone: true, isActive: true } });
-  if (!shop) throw new Error('Shop not found.');
+  const shop = await prisma.shop.findFirst({ where: { id: shopId, setupDone: true, status: 'ACTIVE' } });
+  if (!shop) await throwShopMissing(shopId);
   const rows = await prisma.review.findMany({
-    where: { shopId },
+    // Reviews of closed shops are never listed publicly (text is kept in the DB).
+    where: { shopId, shop: { status: 'ACTIVE', deletedAt: null } },
     orderBy: { createdAt: 'desc' },
     take: 40,
     include: {
-      user: { select: { name: true } },
+      user: { select: { name: true, deletionRequestedAt: true, deletedAt: true } },
       barber: { select: { id: true, name: true } }
     }
   });
@@ -392,7 +436,7 @@ export async function listShopReviews(shopId: string) {
     barberRating: row.barberRating,
     text: row.text,
     createdAt: row.createdAt.toISOString(),
-    customerName: (row.user.name || 'Guest').split(/\s+/)[0] || 'Guest',
+    customerName: displayReviewerName(row.user),
     barber: { id: row.barber.id, name: row.barber.name }
   }));
 }
@@ -417,6 +461,9 @@ export async function createBookingReview(
   if (!booking) throw new Error('Booking not found.');
   if (booking.status !== 'COMPLETED') throw new Error('You can review only after the visit is completed.');
   if (booking.review) throw new Error('You already reviewed this visit.');
+  // T3 case 36 (Prajesh): PAUSED shops still take reviews; only CLOSED/purged shops block.
+  const shopRow = await prisma.shop.findUnique({ where: { id: booking.shopId }, select: { status: true, deletedAt: true } });
+  if (!shopRow || shopRow.status === 'CLOSED' || shopRow.deletedAt) throw SHOP_CLOSED();
 
   const review = await prisma.$transaction(async (tx) => {
     const created = await tx.review.create({
@@ -617,7 +664,7 @@ export async function shopAvailability(input: {
   excludeUserId?: string;
 }) {
   const shop = await prisma.shop.findFirst({
-    where: { id: input.shopId, setupDone: true, isActive: true },
+    where: { id: input.shopId, setupDone: true, status: 'ACTIVE' },
     select: { acceptingAppointments: true, acceptingPausedUntil: true }
   });
   if (!shop) throw new Error('Shop not found.');
@@ -788,7 +835,7 @@ export async function createHold(
   }
   const serviceIds = normalizeServiceIds(input);
   const accepting = await prisma.shop.findFirst({
-    where: { id: input.shopId, setupDone: true, isActive: true },
+    where: { id: input.shopId, setupDone: true, status: 'ACTIVE' },
     select: { acceptingAppointments: true, acceptingPausedUntil: true }
   });
   if (!accepting) throw new Error('Shop not found.');
@@ -821,6 +868,13 @@ export async function createHold(
   try {
     hold = await prisma.$transaction(async (tx) => {
       const now = new Date();
+      await assertUserLive(tx, user.id);
+      // T3 case 39: lock the shop row (FOR SHARE) so a concurrent partner delete, which
+      // UPDATEs the shop to CLOSED and releases its holds, either waits for this hold or
+      // makes it fail here. No orphan hold can stay on a CLOSED shop.
+      const live = await tx.$queryRaw<{ status: string }[]>`
+        SELECT status::text AS status FROM "Shop" WHERE id = ${input.shopId} FOR SHARE`;
+      if (live[0]?.status !== 'ACTIVE') throw SHOP_CLOSED();
       await tx.bookingHold.deleteMany({ where: { expiresAt: { lte: now } } });
 
       const shopBusy: TimeWindow[] = [
@@ -922,6 +976,7 @@ export async function createHold(
       });
     }, txOpts);
   } catch (error) {
+    await rethrowIfAccountClosing(error, user.id);
     if (
       error instanceof Error &&
       (error.message === SLOT_TAKEN_MESSAGE ||
@@ -965,7 +1020,7 @@ export async function createBooking(token: string, input: {
   if (!input.holdId?.trim()) throw new Error('Hold this slot again before paying.');
   const serviceIds = normalizeServiceIds(input);
   const accepting = await prisma.shop.findFirst({
-    where: { id: input.shopId, setupDone: true, isActive: true },
+    where: { id: input.shopId, setupDone: true, status: 'ACTIVE' },
     select: { acceptingAppointments: true, acceptingPausedUntil: true }
   });
   if (!accepting) throw new Error('Shop not found.');
@@ -1017,6 +1072,7 @@ export async function createBooking(token: string, input: {
   let booking;
   try {
     booking = await prisma.$transaction(async (tx) => {
+      await assertUserLive(tx, user.id);
       await tx.$executeRaw`SELECT id FROM "BookingHold" WHERE id = ${input.holdId} AND "userId" = ${user.id} FOR UPDATE`;
       const hold = await tx.bookingHold.findFirst({
         where: { id: input.holdId, userId: user.id }
@@ -1143,6 +1199,7 @@ export async function createBooking(token: string, input: {
       return created;
     }, txOpts);
   } catch (error) {
+    await rethrowIfAccountClosing(error, user.id);
     if (error instanceof Error && (
       error.message === SLOT_TAKEN_MESSAGE ||
       error.message.includes('hold expired') ||
@@ -1480,7 +1537,8 @@ function serializeBooking(booking: NonNullable<Awaited<ReturnType<typeof loadBoo
   const canReschedule = confirmedUpcoming;
   const refundOnCancel = awaiting || (confirmedUpcoming && policy.refundAdvance);
   const hasReview = Boolean(booking.review);
-  const canReview = booking.status === 'COMPLETED' && !hasReview;
+  // T3 case 36 (Prajesh): reviews allowed at ACTIVE and PAUSED shops; CLOSED/purged blocks.
+  const canReview = booking.status === 'COMPLETED' && !hasReview && booking.shop.status !== 'CLOSED' && !booking.shop.deletedAt;
   const { remainingPaise, balanceSettled } = bookingBalance(booking);
   const lat = toNum(booking.shop.latitude as never);
   const lng = toNum(booking.shop.longitude as never);
@@ -1650,6 +1708,7 @@ export async function rescheduleBooking(
 
   try {
     await prisma.$transaction(async (tx) => {
+      await assertUserLive(tx, user.id);
       await tx.$executeRaw`SELECT id FROM "BookingHold" WHERE id = ${input.holdId} AND "userId" = ${user.id} FOR UPDATE`;
       const hold = await tx.bookingHold.findFirst({ where: { id: input.holdId, userId: user.id } });
       if (!hold || !isHoldAlive(hold.expiresAt)) {
@@ -1727,6 +1786,7 @@ export async function rescheduleBooking(
       await tx.bookingHold.delete({ where: { id: hold.id } });
     }, txOpts);
   } catch (error) {
+    await rethrowIfAccountClosing(error, user.id);
     if (error instanceof Error && (
       error.message === SLOT_TAKEN_MESSAGE ||
       error.message === CUSTOMER_OVERLAP_MESSAGE ||
@@ -1786,7 +1846,7 @@ export async function listFavouriteShops(token: string, origin?: { lat?: number;
   });
   const lat = origin?.lat ?? 23.2324;
   const lng = origin?.lng ?? 87.8615;
-  const shops = rows.map((row) => row.shop).filter((shop) => shop.setupDone && shop.isActive);
+  const shops = rows.map((row) => row.shop).filter((shop) => shop.setupDone && shop.status === 'ACTIVE');
   const openById = await loadOpenStatusForShops(
     prisma,
     shops.map((shop) => shop.id)
@@ -1807,7 +1867,7 @@ export async function listFavouriteShops(token: string, origin?: { lat?: number;
 
 export async function setFavouriteShop(token: string, shopId: string, favourite: boolean) {
   const user = await userFromToken(token);
-  const shop = await prisma.shop.findFirst({ where: { id: shopId, setupDone: true, isActive: true } });
+  const shop = await prisma.shop.findFirst({ where: { id: shopId, setupDone: true, status: 'ACTIVE' } });
   if (!shop) throw new Error('Shop not found.');
   if (favourite) {
     await prisma.favouriteShop.upsert({
