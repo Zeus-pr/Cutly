@@ -18,6 +18,7 @@ suite('#46 delete re-auth API (database)', () => {
   let verifyPhoneOtp: typeof import('../backend/src/auth').verifyPhoneOtp;
   let finishGoogleSignIn: typeof import('../backend/src/auth').finishGoogleSignIn;
   let startCustomerReauth: typeof import('../backend/src/auth').startCustomerReauth;
+  let sendPhoneOtp: typeof import('../backend/src/auth').sendPhoneOtp;
   const tag = `i46${Date.now().toString(36)}`;
   let seq = 0;
   const uniquePhone = () => `+9190${String(Date.now() + ++seq).slice(-8)}`;
@@ -28,7 +29,7 @@ suite('#46 delete re-auth API (database)', () => {
     process.env.PHONE_HASH_KEY = 'test-phone-hash-key-0123456789';
     const { PrismaClient } = await import('@prisma/client');
     prisma = new PrismaClient();
-    ({ signToken, verifyPhoneOtp, finishGoogleSignIn, startCustomerReauth } = await import('../backend/src/auth'));
+    ({ signToken, verifyPhoneOtp, finishGoogleSignIn, startCustomerReauth, sendPhoneOtp } = await import('../backend/src/auth'));
     const mod = await import('../backend/src/server');
     server = mod.app.listen(0, '127.0.0.1');
     await new Promise((r) => server.once('listening', r));
@@ -120,6 +121,7 @@ suite('#46 delete re-auth API (database)', () => {
     await sent(user.phone!, 'reauth');
     await expect(verifyPhoneOtp(user.phone!, '123456', undefined, counting)).rejects.toThrow(/incorrect or expired/);
     // A login code cannot re-auth (closes the login /otp/send bypass of the re-auth send limit).
+    await prisma.phoneOtp.deleteMany({ where: { phone: user.phone! } });
     await sent(user.phone!, 'login');
     await expect(startCustomerReauth(token, { method: 'otp', code: '123456' }, counting)).rejects.toMatchObject({ code: 'REAUTH_FAILED' });
     expect(twilioCalls).toBe(0); // mismatches never reach Twilio, so the code is not consumed
@@ -131,6 +133,33 @@ suite('#46 delete re-auth API (database)', () => {
     // No send on record → rejected.
     await prisma.phoneOtp.deleteMany({ where: { phone: user.phone! } });
     await expect(startCustomerReauth(token, { method: 'otp', code: '123456' }, counting)).rejects.toMatchObject({ code: 'REAUTH_FAILED' });
+  });
+
+  it('login-code spam never blocks re-auth send/verify, and re-auth sends never block login', async () => {
+    const { user, token } = await customer();
+    const phone = user.phone!;
+    const sms = { sendSms: async () => undefined };
+    const ok = { verifyCode: async () => true };
+    // Attacker who only knows the phone spams login codes: login cooldown trips…
+    await sendPhoneOtp(phone, 'login', sms);
+    await expect(sendPhoneOtp(phone, 'login', sms)).rejects.toThrow(/Wait a moment/);
+    // …but the owner's re-auth send is unaffected, and the newer login send does not shadow it.
+    await sendPhoneOtp(phone, 'reauth', sms);
+    await sendPhoneOtp(phone, 'login', sms).catch(() => undefined);
+    await prisma.phoneOtp.create({ data: { phone, codeHash: 'twilio-verify', purpose: 'login', expiresAt: new Date(Date.now() + 300_000) } });
+    expect((await startCustomerReauth(token, { method: 'otp', code: '123456' }, ok)).reauthToken).toBeTruthy();
+    // Re-auth verify cleared only re-auth rows; the login row is still there.
+    expect(await prisma.phoneOtp.count({ where: { phone, purpose: 'login' } })).toBeGreaterThan(0);
+    expect(await prisma.phoneOtp.count({ where: { phone, purpose: 'reauth' } })).toBe(0);
+
+    // Reverse: re-auth cooldown active and a newer re-auth send never blocks or shadows login.
+    await prisma.phoneOtp.deleteMany({ where: { phone } });
+    await sendPhoneOtp(phone, 'reauth', sms);
+    await expect(sendPhoneOtp(phone, 'reauth', sms)).rejects.toThrow(/Wait a moment/);
+    await sendPhoneOtp(phone, 'login', sms);
+    await prisma.phoneOtp.create({ data: { phone, codeHash: 'twilio-verify', purpose: 'reauth', expiresAt: new Date(Date.now() + 300_000) } });
+    expect((await verifyPhoneOtp(phone, '123456', undefined, ok)).user.id).toBe(user.id);
+    expect(await prisma.phoneOtp.count({ where: { phone, purpose: 'reauth' } })).toBeGreaterThan(0);
   });
 
   it('Google sign-in inside grace returns restored: true (googleSub row and pending email owner)', async () => {

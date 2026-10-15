@@ -590,32 +590,42 @@ async function verifyService() {
 /** #46: what an SMS code was sent for. Twilio Verify is per phone, so we bind the purpose here. */
 export type OtpPurpose = 'login' | 'reauth';
 
-export async function sendPhoneOtp(phone: string, purpose: OtpPurpose = 'login') {
-  const recent = await prisma.phoneOtp.findFirst({ where: { phone, codeHash: 'twilio-verify' }, orderBy: { createdAt: 'desc' } });
-  if (recent && Date.now() - recent.createdAt.getTime() < OTP_COOLDOWN_MS) {
-    throw new Error('Wait a moment before requesting another code.');
-  }
+async function twilioSendSms(phone: string) {
   const { client, serviceSid } = await verifyService();
   try {
     await client.verify.v2.services(serviceSid).verifications.create({ to: phone, channel: 'sms' });
   } catch (error) {
     twilioError(error);
   }
+}
+
+export async function sendPhoneOtp(
+  phone: string,
+  purpose: OtpPurpose = 'login',
+  deps: { sendSms: (phone: string) => Promise<void> } = { sendSms: twilioSendSms }
+) {
+  // Cooldown is per purpose: login sends (anyone who knows the phone) never block a re-auth send, and vice versa.
+  const recent = await prisma.phoneOtp.findFirst({ where: { phone, purpose, codeHash: 'twilio-verify' }, orderBy: { createdAt: 'desc' } });
+  if (recent && Date.now() - recent.createdAt.getTime() < OTP_COOLDOWN_MS) {
+    throw new Error('Wait a moment before requesting another code.');
+  }
+  await deps.sendSms(phone);
   await prisma.phoneOtp.create({
     data: { phone, codeHash: 'twilio-verify', purpose, expiresAt: new Date(Date.now() + OTP_TTL_MS) }
   });
 }
 
 /**
- * #46 (sec LOW): login and re-auth codes are not interchangeable. The latest unexpired send for
- * this phone must be for `purpose`; checked BEFORE Twilio so a mismatched code is not consumed.
+ * #46 (sec LOW): login and re-auth codes are not interchangeable. A code verifies only if an
+ * unexpired send for THIS purpose exists for the phone. Scoped per purpose, so login sends never
+ * shadow a re-auth send (or the reverse). Checked BEFORE Twilio so a mismatch consumes nothing.
  */
 export async function otpPurposeMatches(phone: string, purpose: OtpPurpose, now = new Date()) {
-  const latest = await prisma.phoneOtp.findFirst({
-    where: { phone, codeHash: 'twilio-verify', expiresAt: { gt: now } },
+  const live = await prisma.phoneOtp.findFirst({
+    where: { phone, purpose, codeHash: 'twilio-verify', expiresAt: { gt: now } },
     orderBy: { createdAt: 'desc' }
   });
-  return latest?.purpose === purpose;
+  return Boolean(live);
 }
 
 type VerifyCode = (phone: string, code: string) => Promise<boolean>;
@@ -644,7 +654,7 @@ export async function verifyPhoneOtp(
   deps: { verifyCode: VerifyCode } = { verifyCode: checkPhoneOtpCode }
 ) {
   if (!(await purposeBoundOtpCheck('login', deps.verifyCode)(phone, code))) throw new Error('That code is incorrect or expired.');
-  await prisma.phoneOtp.deleteMany({ where: { phone } });
+  await prisma.phoneOtp.deleteMany({ where: { phone, purpose: 'login' } });
 
   const byPhone = await prisma.user.findUnique({ where: { phone } });
 
@@ -701,7 +711,7 @@ export async function startCustomerReauth(
   const current = await userFromToken(token);
   const user = await prisma.user.findUniqueOrThrow({ where: { id: current.id } });
   await verifyReauthProof(user, input, { checkOtp: purposeBoundOtpCheck('reauth', deps.verifyCode), verifyGoogle: defaultVerifyGoogle });
-  if (input.method === 'otp' && user.phone) await prisma.phoneOtp.deleteMany({ where: { phone: user.phone } });
+  if (input.method === 'otp' && user.phone) await prisma.phoneOtp.deleteMany({ where: { phone: user.phone, purpose: 'reauth' } });
   return issueReauthToken(prisma, secret(), user.id, 'customer');
 }
 
