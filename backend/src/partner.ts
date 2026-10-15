@@ -447,7 +447,9 @@ export async function setPartnerAcceptingAppointments(token: string, mode: Partn
     };
   }
 
-  await prisma.shop.update({ where: { id: shop.id }, data });
+  // #46 (P3): a shop restored as PAUSED comes back to ACTIVE only when the partner opens it.
+  const reopen = mode === 'open' && shop.status === 'PAUSED' ? shopStatusData('ACTIVE') : {};
+  await prisma.shop.update({ where: { id: shop.id }, data: { ...data, ...reopen } });
   return shopFor(partner.id);
 }
 

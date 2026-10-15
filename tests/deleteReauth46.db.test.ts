@@ -101,6 +101,12 @@ suite('#46 delete re-auth API (database)', () => {
     expect(r.body.data.restored).toBe(true);
     expect((await prisma.shop.findUniqueOrThrow({ where: { ownerPartnerId: partner.id } })).status).toBe('PAUSED');
     expect((await call('POST', '/api/partner/login', { body: { email, password: 'password123' } })).body.data.restored).toBe(false);
+    // Turning bookings back on reopens the PAUSED shop.
+    const t = signToken({ id: partner.id, email, phone: null, name: null }, 'partner', partner.tokenVersion);
+    const open = await call('PATCH', '/api/partner/accepting', { token: t, body: { mode: 'open' } });
+    expect(open.status).toBe(200);
+    expect(open.body.data.status).toBe('ACTIVE');
+    expect((await prisma.shop.findUniqueOrThrow({ where: { ownerPartnerId: partner.id } })).isActive).toBe(true);
   });
 
   it('partner 409 UPCOMING_BOOKINGS rows carry customerName and serviceNames', async () => {
