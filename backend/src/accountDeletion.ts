@@ -142,7 +142,14 @@ export const PARTNER_BLOCKING_STATUSES = ['HELD', 'PAYMENT_PENDING', 'AWAITING_S
 /** Customer visits that block a customer delete outright ("finish your current visit first"). */
 export const CUSTOMER_IN_VISIT_STATUSES = ['ARRIVED', 'IN_SERVICE'] as const;
 
-/** Customer bookings cancelled when the customer deletes their account. */
+/**
+ * An ARRIVED/IN_SERVICE booking blocks a customer delete only if its slot ended within
+ * this window. Older ones are stale (the shop never closed them out) and must not lock
+ * the customer out of deleting.
+ */
+export const IN_VISIT_RECENT_MS = 6 * 60 * 60 * 1000;
+
+/** Customer bookings cancelled when the customer deletes their account (only if endsAt > now). */
 export const CUSTOMER_CANCEL_ON_DELETE_STATUSES = ['HELD', 'PAYMENT_PENDING', 'AWAITING_SHOP', 'CONFIRMED'] as const;
 
 /** A booking blocks partner delete when it is in a live status and not over yet. */

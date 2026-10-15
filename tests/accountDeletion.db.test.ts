@@ -178,6 +178,11 @@ suite('T3 delete account (database)', () => {
     const { shop, barber } = await seedShop('p', partner.id);
     const customer = await prisma.user.create({ data: { phone: `+9195${String(Date.now()).slice(-8)}` } });
     const booking = await seedBooking(customer.id, shop.id, barber.id, 'CONFIRMED', new Date(Date.now() + 86_400_000));
+    await prisma.shop.update({ where: { id: shop.id }, data: { phone: '+919811111111', city: 'Bardhaman' } });
+    await prisma.shopImage.create({ data: { shopId: shop.id, url: 'data:image/png;base64,AAAA' } });
+    const lead = await prisma.partnerLead.create({ data: { phone: partnerPhone, shopName: 'Shop p' } });
+    const past = await seedBooking(customer.id, shop.id, barber.id, 'COMPLETED', new Date(Date.now() - 86_400_000));
+    await prisma.review.create({ data: { userId: customer.id, shopId: shop.id, barberId: barber.id, bookingId: past.id, rating: 4, barberRating: 4, text: 'Kept text' } });
 
     const re = await call('POST', '/api/partner/reauth', { token, body: { password: 'password123' } });
     const blocked = await call('DELETE', '/api/partner/account', { token, reauth: re.body.data.reauthToken });
@@ -190,7 +195,7 @@ suite('T3 delete account (database)', () => {
     const del = await call('DELETE', '/api/partner/account', { token, reauth: re2.body.data.reauthToken });
     expect(del.status).toBe(200);
     expect(await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } })).toMatchObject({ status: 'CLOSED', isActive: false, deletedAt: null });
-    expect(await prisma.booking.count({ where: { shopId: shop.id } })).toBe(1);
+    expect(await prisma.booking.count({ where: { shopId: shop.id } })).toBe(2);
     expect((await call('GET', `/api/shops/${shop.id}`)).body).toMatchObject({ code: 'SHOP_CLOSED' });
     expect((await call('GET', `/api/shops/${shop.id}`)).status).toBe(410);
     expect((await call('GET', '/api/partner/shop', { token })).status).toBe(401);
@@ -206,8 +211,89 @@ suite('T3 delete account (database)', () => {
     await runAccountPurge();
     expect(await prisma.partner.findUniqueOrThrow({ where: { id: partner.id } })).toMatchObject({ email: null, phone: null, passwordHash: null });
     const closed = await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } });
-    expect(closed).toMatchObject({ status: 'CLOSED', phone: null, name: 'Shop p' });
+    expect(closed).toMatchObject({ status: 'CLOSED', phone: null, name: 'Closed shop', city: 'Bardhaman' });
     expect(closed.deletedAt).not.toBeNull();
+    expect(await prisma.shopImage.count({ where: { shopId: shop.id } })).toBe(0);
+    expect((await prisma.barber.findUniqueOrThrow({ where: { id: barber.id } })).name).toBe('Former staff');
+    expect((await prisma.partnerLead.findUniqueOrThrow({ where: { id: lead.id } })).phone).toBe('');
+    // Review text kept, but not listed publicly.
+    expect((await prisma.review.findUniqueOrThrow({ where: { bookingId: past.id } })).text).toBe('Kept text');
+    expect((await call('GET', `/api/shops/${shop.id}/reviews`)).status).toBe(410);
+  });
+
+  it('customer delete ignores stale past bookings (review item 2)', async () => {
+    const user = await prisma.user.create({ data: { phone: `+9194${String(Date.now()).slice(-8)}`, passwordHash: await bcrypt.hash('password123', 4) } });
+    const token = signToken({ id: user.id, email: null, phone: user.phone, name: null }, 'customer', 0);
+    const { shop, barber } = await seedShop('s');
+    const weeksAgo = new Date(Date.now() - 21 * 86_400_000);
+    const staleVisit = await seedBooking(user.id, shop.id, barber.id, 'ARRIVED', weeksAgo);
+    const staleConfirmed = await seedBooking(user.id, shop.id, barber.id, 'CONFIRMED', new Date(weeksAgo.getTime() + 3_600_000));
+    const staleHeld = await seedBooking(user.id, shop.id, barber.id, 'HELD', new Date(weeksAgo.getTime() + 7_200_000));
+    const future = await seedBooking(user.id, shop.id, barber.id, 'CONFIRMED', new Date(Date.now() + 86_400_000));
+    const re = await call('POST', '/api/auth/reauth', { token, body: { password: 'password123' } });
+    const del = await call('DELETE', '/api/auth/account', { token, reauth: re.body.data.reauthToken });
+    expect(del.status).toBe(200);
+    expect(del.body.data.cancelledBookings).toBe(1);
+    const status = async (id: string) => (await prisma.booking.findUniqueOrThrow({ where: { id } })).status;
+    expect(await status(staleVisit.id)).toBe('ARRIVED');
+    expect(await status(staleConfirmed.id)).toBe('CONFIRMED');
+    expect(await status(staleHeld.id)).toBe('HELD');
+    expect(await status(future.id)).toBe('CANCELLED');
+  });
+
+  it('a recent in-chair visit still blocks', async () => {
+    const user = await prisma.user.create({ data: { phone: `+9193${String(Date.now()).slice(-8)}`, passwordHash: await bcrypt.hash('password123', 4) } });
+    const token = signToken({ id: user.id, email: null, phone: user.phone, name: null }, 'customer', 0);
+    const { shop, barber } = await seedShop('r');
+    await seedBooking(user.id, shop.id, barber.id, 'ARRIVED', new Date(Date.now() - 2 * 3_600_000));
+    const re = await call('POST', '/api/auth/reauth', { token, body: { password: 'password123' } });
+    expect(await call('DELETE', '/api/auth/account', { token, reauth: re.body.data.reauthToken })).toMatchObject({
+      status: 409,
+      body: { code: 'VISIT_IN_PROGRESS' }
+    });
+  });
+
+  it('purge lock: skips while held, and frees itself when the holder rolls back (review item 1)', async () => {
+    const { PURGE_LOCK_KEY } = await import('../backend/src/accountPurge');
+    let release!: () => void;
+    let held!: () => void;
+    const isHeld = new Promise<void>((r) => (held = r));
+    const holder = prisma
+      .$transaction(async (tx) => {
+        const [lock] = await tx.$queryRaw<{ ok: boolean }[]>`SELECT pg_try_advisory_xact_lock(${PURGE_LOCK_KEY}) AS ok`;
+        expect(lock.ok).toBe(true);
+        held();
+        await new Promise<void>((r) => (release = r));
+        throw new Error('simulated timeout / rollback');
+      }, { timeout: 20_000 })
+      .catch(() => 'rolled back');
+    await isHeld;
+    expect((await runAccountPurge()).skipped).toBe(true);
+    release();
+    expect(await holder).toBe('rolled back');
+    expect((await runAccountPurge()).skipped).toBe(false);
+  }, 15_000);
+
+  it('a lock holder that exceeds its transaction timeout does not leave the lock stuck', async () => {
+    const { PURGE_LOCK_KEY } = await import('../backend/src/accountPurge');
+    const timedOut = await prisma
+      .$transaction(async (tx) => {
+        const [lock] = await tx.$queryRaw<{ ok: boolean }[]>`SELECT pg_try_advisory_xact_lock(${PURGE_LOCK_KEY}) AS ok`;
+        expect(lock.ok).toBe(true);
+        expect((await runAccountPurge()).skipped).toBe(true);
+        await new Promise((r) => setTimeout(r, 1500));
+        await tx.$queryRaw`SELECT 1`;
+      }, { timeout: 300 })
+      .then(() => 'committed', () => 'timed out');
+    expect(timedOut).toBe('timed out');
+    expect((await runAccountPurge()).skipped).toBe(false);
+  }, 15_000);
+
+  it('partner sign-up during grace → 409 ACCOUNT_PENDING_DELETION (review wording)', async () => {
+    const { partnerSignUp } = await import('../backend/src/partner');
+    const email = `${tag}-g@example.com`;
+    await prisma.partner.create({ data: { email, deletionRequestedAt: new Date() } });
+    await expect(partnerSignUp(email, 'password123')).rejects.toMatchObject({ status: 409, code: 'ACCOUNT_PENDING_DELETION' });
   });
 
   it('adminApp is importable and answers without a listener', async () => {

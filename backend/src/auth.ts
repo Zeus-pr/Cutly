@@ -7,6 +7,7 @@ import { assertDateOfBirth } from '../../utils/dateOfBirth';
 import {
   CUSTOMER_CANCEL_ON_DELETE_STATUSES,
   CUSTOMER_IN_VISIT_STATUSES,
+  IN_VISIT_RECENT_MS,
   deletionDeadline,
   deletionState,
   isDeletionRequested
@@ -667,11 +668,16 @@ export async function deleteCustomerAccount(token: string, reauthToken?: string 
     const user = await tx.user.findUniqueOrThrow({ where: { id: current.id } });
     if (isDeletionRequested(user)) throw new Error('Sign in again.');
     const inVisit = await tx.booking.count({
-      where: { userId: user.id, status: { in: [...CUSTOMER_IN_VISIT_STATUSES] } }
+      where: {
+        userId: user.id,
+        status: { in: [...CUSTOMER_IN_VISIT_STATUSES] },
+        endsAt: { gt: new Date(now.getTime() - IN_VISIT_RECENT_MS) }
+      }
     });
     if (inVisit) throw new AppError('Finish your current visit first.', 409, 'VISIT_IN_PROGRESS');
     const upcoming = await tx.booking.findMany({
-      where: { userId: user.id, status: { in: [...CUSTOMER_CANCEL_ON_DELETE_STATUSES] } },
+      // Only genuinely upcoming bookings; past unclosed visits are left as they are.
+      where: { userId: user.id, status: { in: [...CUSTOMER_CANCEL_ON_DELETE_STATUSES] }, endsAt: { gt: now } },
       include: { payment: true }
     });
     const refunded: string[] = [];

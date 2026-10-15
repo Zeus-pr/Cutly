@@ -119,6 +119,10 @@ async function partnerSignInGate<T extends { id: string; deletionRequestedAt: Da
 
 export async function partnerSignUp(email: string, password: string, name?: string) {
   const existing = await prisma.partner.findUnique({ where: { email } });
+  // Same rule as customer sign-up (T3-Q6): in grace → tell them to sign in, which restores.
+  if (existing && deletionState(existing) === 'pending') {
+    throw new AppError('This account is pending deletion. Sign in to restore it.', 409, 'ACCOUNT_PENDING_DELETION');
+  }
   if (existing) throw new Error('A partner account with that email already exists.');
   const partner = await prisma.partner.create({
     data: { email, name: name || null, passwordHash: await bcrypt.hash(password, 10) }

@@ -6,6 +6,15 @@ import { app } from './server';
 import { paymentsEnabled } from './razorpay';
 import { startAwaitingExpirySweep } from './awaitingExpiry';
 import { startAccountPurgeSweep } from './accountPurge';
+import { phoneHashKey } from './accountDeletion';
+
+// T3: without PHONE_HASH_KEY every purge would fail and PII would outlive the 14-day promise.
+try {
+  phoneHashKey();
+} catch (error) {
+  console.error(`[startup] ${error instanceof Error ? error.message : error}`);
+  process.exit(1);
+}
 
 const port = Number(process.env.PORT || 4000);
 

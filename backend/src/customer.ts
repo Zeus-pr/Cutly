@@ -390,7 +390,8 @@ export async function listShopReviews(shopId: string) {
   const shop = await prisma.shop.findFirst({ where: { id: shopId, setupDone: true, status: 'ACTIVE' } });
   if (!shop) await throwShopMissing(shopId);
   const rows = await prisma.review.findMany({
-    where: { shopId },
+    // Reviews of closed shops are never listed publicly (text is kept in the DB).
+    where: { shopId, shop: { status: 'ACTIVE', deletedAt: null } },
     orderBy: { createdAt: 'desc' },
     take: 40,
     include: {

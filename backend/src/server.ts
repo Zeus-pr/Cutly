@@ -195,7 +195,8 @@ const reauthSchema = z.union([
   z.object({ googleIdToken: z.string().min(20) }).transform((v) => ({ method: 'google' as const, idToken: v.googleIdToken }))
 ]);
 async function reauthLimited(req: express.Request, res: express.Response, who: string) {
-  const byIp = await rateLimit(clientKey(req, `reauth-${who}`), 5, 15 * 60_000);
+  // 5 per session (≈ per user) + a looser 20 per IP so a shared NAT does not lock everyone out.
+  const byIp = await rateLimit(clientKey(req, `reauth-${who}`), 20, 15 * 60_000);
   const byToken = await rateLimit(`reauth-${who}-tok:${bearer(req).slice(-24)}`, 5, 15 * 60_000);
   const limited = !byIp.ok ? byIp : !byToken.ok ? byToken : null;
   if (!limited) return false;

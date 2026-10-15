@@ -33,11 +33,15 @@ A clean-up job then permanently removes your personal details:
 - **Customers:** name, phone, email, gender, date of birth, invite code, password, Google link
   and push token. Favourite shops, saved locations and in-app notifications are deleted.
 - **Partners:** name, phone, email, password, Google link and push token. The shop stays
-  closed and its public contact number is removed. The shop name and address are kept
-  because they appear in customers' booking history.
+  closed: its name becomes "Closed shop" (the city is kept for customers' booking history),
+  its public contact number is removed, staff names become "Former staff", and all shop
+  photos are deleted. The phone number on any "Partner with us" enquiry from that partner
+  is blanked. Customers' reviews of the shop are kept but no longer shown publicly.
 
 This cannot be undone. After that the same phone or email can be used to create a new,
-separate account.
+separate account. The clean-up runs hourly, so for up to about an hour after the 14 days a
+new sign-up with the same phone or email may still be refused ("try another email or phone,
+or sign in"); it works once the clean-up has run.
 
 ## 4. What we keep, and why
 
@@ -66,7 +70,7 @@ shop comes back **paused**, so the owner turns bookings back on from Partner Hom
 | Env var | Default | Meaning |
 |---|---|---|
 | `ACCOUNT_DELETION_GRACE_DAYS` | `14` | Restore window |
-| `PHONE_HASH_KEY` | (required) | HMAC key for the phone fingerprint; purge refuses to run rows without it |
+| `PHONE_HASH_KEY` | (required) | HMAC key for the phone fingerprint; the API refuses to start without it |
 | `DELETED_IDENTITY_RETENTION_DAYS` | `365` | Phone fingerprint retention |
 | `DELETION_FORMER_CUSTOMER_DURING_GRACE` | `1` | Show "Former customer" during grace (product call pending) |
 | `PARTNER_SELF_DELETE_ENABLED` | `1` | `0` = partner delete is ops-only (product call pending) |
