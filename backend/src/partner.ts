@@ -447,8 +447,12 @@ export async function setPartnerAcceptingAppointments(token: string, mode: Partn
     };
   }
 
-  // #46 (P3): a shop restored as PAUSED comes back to ACTIVE only when the partner opens it.
-  const reopen = mode === 'open' && shop.status === 'PAUSED' ? shopStatusData('ACTIVE') : {};
+  // #46 (P3): a restored shop (PAUSED, or CLOSED with PARTNER_RESTORE_SHOP_STATUS=CLOSED) comes
+  // back to ACTIVE only when the partner opens it. CLOSED is otherwise only set by delete/purge,
+  // so an un-purged CLOSED shop owned by a partner who isn't pending deletion (partnerFromToken
+  // rejects pending partners) is a restored shop.
+  const restoredShop = (shop.status === 'PAUSED' || shop.status === 'CLOSED') && !shop.deletedAt;
+  const reopen = mode === 'open' && restoredShop ? shopStatusData('ACTIVE') : {};
   await prisma.shop.update({ where: { id: shop.id }, data: { ...data, ...reopen } });
   return shopFor(partner.id);
 }

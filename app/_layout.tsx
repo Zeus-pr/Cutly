@@ -55,6 +55,7 @@ function SessionGate({ bootDone }: { bootDone: boolean }) {
   const audience = useSessionStore((state) => state.audience);
   const partnerToken = useSessionStore((state) => state.partnerToken);
   const setupDone = useSessionStore((state) => state.setupDone);
+  const restoredNotice = useSessionStore((state) => state.restoredNotice);
   const router = useRouter();
   const segments = useSegments();
 
@@ -104,6 +105,12 @@ function SessionGate({ bootDone }: { bootDone: boolean }) {
     }
 
     if (accessToken) {
+      // #46 C9: a sign-in that restored a pending deletion shows /account/restored first,
+      // even when the profile is incomplete. restored.tsx clears the notice and routes on.
+      if (restoredNotice === 'customer') {
+        if (!(root === 'account' && child === 'restored')) router.replace('/account/restored');
+        return;
+      }
       const profileReady = customerProfileReady({ name, gender, dateOfBirth });
       if (!profileReady) {
         if (root !== 'complete-profile') router.replace('/complete-profile');
@@ -139,6 +146,7 @@ function SessionGate({ bootDone }: { bootDone: boolean }) {
     audience,
     partnerToken,
     setupDone,
+    restoredNotice,
     segments,
     router
   ]);

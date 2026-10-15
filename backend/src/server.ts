@@ -279,10 +279,7 @@ app.post('/api/partner/signup', (_req, res) => {
 });
 app.post('/api/partner/login', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'partner-login'), 20, 15 * 60_000);
-  if (!limited.ok) {
-    res.setHeader('Retry-After', String(limited.retryAfterSec));
-    return sendRateLimited(res, limited, 'login attempts');
-  }
+  if (!limited.ok) return sendRateLimited(res, limited, 'login attempts');
   const parsed = z.object({ email: emailSchema, password: z.string().min(1) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter your email and password.' });
   return handle(res, () => partnerSignIn(parsed.data.email, parsed.data.password));

@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { PressScale } from '@/components/PressScale';
 import { ScreenBack } from '@/components/ScreenBack';
@@ -19,7 +19,8 @@ import {
   TextButton,
   Title,
   deleteStyles,
-  useCountdown
+  useCountdown,
+  useLeaveLock
 } from '@/components/accountDeletion/DeleteParts';
 import { partnerDeletion, type PartnerDeleteResult } from '@/services/accountDeletion';
 import { appAlert } from '@/store/useDialogStore';
@@ -33,6 +34,9 @@ import {
   formatIstRow,
   mmss,
   reauthOutcome,
+  holdGrant,
+  liveGrant,
+  type HeldGrant,
   type UpcomingBooking
 } from '@/utils/deleteFlow';
 
@@ -54,6 +58,8 @@ export default function PartnerDeleteScreen() {
   const [celebrate, setCelebrate] = useState(false);
   const [rateTotal, setRateTotal] = useState(0);
   const busyRef = useRef(false);
+  // A grant survives a failed DELETE (consumed inside the delete tx), so reuse it while valid.
+  const grantRef = useRef<HeldGrant | null>(null);
   const left = useCountdown(retryAt);
 
   function goRate(at: number) {
@@ -76,29 +82,39 @@ export default function PartnerDeleteScreen() {
 
   function openPassword() {
     if (retryAt && retryAt > Date.now()) return goRate(retryAt);
+    // Still holding a valid grant (e.g. after P2 or a 409): go straight to DELETE.
+    if (liveGrant(grantRef.current)) return void confirm();
     setPassword('');
     setError('');
     setStep('password');
   }
 
   async function confirm() {
-    if (busyRef.current || !password) return;
+    if (busyRef.current) return;
+    let grant = liveGrant(grantRef.current);
+    if (!grant && !password) {
+      setStep('password');
+      return;
+    }
     busyRef.current = true;
     setBusy(true);
     setError('');
     try {
-      let grant;
-      try {
-        grant = await partnerDeletion.reauth({ password });
-      } catch (err) {
-        const out = reauthOutcome(err);
-        if (out.kind === 'rateLimited') return goRate(out.retryAt);
-        if (out.kind === 'signedOut') return signedOut();
-        setError(out.kind === 'failed' ? [out.message, attemptsCopy(out.attemptsRemaining)].filter(Boolean).join(' ') : out.message);
-        return;
+      if (!grant) {
+        try {
+          grant = holdGrant(await partnerDeletion.reauth({ password }));
+          grantRef.current = grant;
+        } catch (err) {
+          const out = reauthOutcome(err);
+          if (out.kind === 'rateLimited') return goRate(out.retryAt);
+          if (out.kind === 'signedOut') return signedOut();
+          setError(out.kind === 'failed' ? [out.message, attemptsCopy(out.attemptsRemaining)].filter(Boolean).join(' ') : out.message);
+          return;
+        }
       }
       try {
         const done = await partnerDeletion.deleteAccount(grant.reauthToken);
+        grantRef.current = null;
         setResult(done);
         setCelebrate(true);
         setStep('done');
@@ -109,12 +125,17 @@ export default function PartnerDeleteScreen() {
             setBookings(out.bookings);
             return setStep('bookings');
           case 'reauth':
+            grantRef.current = null;
             setPassword('');
             return setError(out.message);
           case 'rateLimited':
             return goRate(out.retryAt);
           case 'retry':
-            return appAlert('Try again', out.message);
+            // Grant is still valid: retry the DELETE without asking for the password again.
+            return appAlert('Try again', out.message, [
+              { label: 'Not now', role: 'cancel' },
+              { label: 'Try again', role: 'confirm', onPress: () => void confirm() }
+            ]);
           case 'opsOnly':
             // No real support contact exists in the repo yet; don't open a placeholder number.
             return appAlert('Contact CutLy support', out.message);
@@ -137,6 +158,9 @@ export default function PartnerDeleteScreen() {
     session.setAudience('customer');
     router.replace('/auth');
   }
+
+  // C8: the token is already dead server-side; never let back/swipe return into the app.
+  const leave = useLeaveLock(step === 'done', finish);
 
   let content: ReactNode;
   if (step === 'confirm') {
@@ -254,13 +278,14 @@ export default function PartnerDeleteScreen() {
           ]}
         />
         <View style={s.spacer} />
-        <Cta pill label="Done" onPress={finish} />
+        <Cta pill label="Done" onPress={leave} />
       </>
     );
   }
 
   return (
     <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
+      <Stack.Screen options={{ gestureEnabled: step !== 'done' }} />
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
         <View style={s.form}>{content}</View>
       </ScrollView>

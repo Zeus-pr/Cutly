@@ -60,11 +60,8 @@ export default function Auth() {
 
   function afterAuth() {
     const session = useSessionStore.getState();
-    // #46 C9: this sign-in restored an account that was pending deletion.
-    if (session.restoredNotice === 'customer') {
-      router.replace('/account/restored');
-      return;
-    }
+    // #46 C9: SessionGate (app/_layout.tsx) owns the /account/restored redirect.
+    if (session.restoredNotice === 'customer') return;
     if (!customerProfileReady(session)) {
       router.replace('/complete-profile');
       return;

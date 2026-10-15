@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, AppState, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { AccessibilityInfo, AppState, BackHandler, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from 'expo-router';
 import Svg, { Circle } from 'react-native-svg';
-import { useReducedMotion } from 'react-native-reanimated';
 import { PressScale } from '@/components/PressScale';
 import { fontFamily } from '@/constants/fonts';
 import { radii, spacing, typography, type Palette } from '@/constants/theme';
@@ -240,11 +240,10 @@ export function useCountdown(retryAt: number | null) {
   return left;
 }
 
-/** C6 ring: accent arc on a sand track with mm:ss. Static (no animation) under Reduce Motion. */
+/** C6 ring: accent arc on a sand track with mm:ss. The arc steps once a second with no animation, so it shows real progress under Reduce Motion too. */
 export function CountdownRing({ left, total }: { left: number; total: number }) {
   const s = useThemedStyles(deleteStyles);
   const c = useColors();
-  const reduceMotion = useReducedMotion();
   const size = 168;
   const stroke = 12;
   const r = (size - stroke) / 2;
@@ -268,7 +267,7 @@ export function CountdownRing({ left, total }: { left: number; total: number }) 
           fill="none"
           strokeLinecap="round"
           strokeDasharray={`${circ} ${circ}`}
-          strokeDashoffset={reduceMotion ? 0 : circ * (1 - frac)}
+          strokeDashoffset={circ * (1 - frac)}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
       </Svg>
@@ -298,4 +297,43 @@ export async function freshGoogleIdToken(): Promise<string | null> {
   const idToken = result.data?.idToken;
   if (!idToken) throw new Error('Google did not return a sign-in token.');
   return idToken;
+}
+
+/**
+ * #46 C8: after DELETE succeeds the server has bumped tokenVersion, so the stored token is
+ * dead. While `locked`, Android back and any stack pop (swipe, header back) are routed to
+ * `leave` (which clears auth and replaces the stack) instead of returning into the app.
+ * Pair with `<Stack.Screen options={{ gestureEnabled: !locked }} />` for the iOS swipe.
+ * Returns the guarded `leave` for the Done button.
+ */
+export function useLeaveLock(locked: boolean, leave: () => void): () => void {
+  const navigation = useNavigation();
+  const leaveRef = useRef(leave);
+  leaveRef.current = leave;
+  const leavingRef = useRef(false);
+
+  const run = useCallback(() => {
+    if (leavingRef.current) return;
+    leavingRef.current = true;
+    leaveRef.current();
+  }, []);
+
+  useEffect(() => {
+    if (!locked) return;
+    const back = BackHandler.addEventListener('hardwareBackPress', () => {
+      run();
+      return true;
+    });
+    const unsub = navigation.addListener('beforeRemove', (e) => {
+      if (leavingRef.current) return;
+      e.preventDefault();
+      run();
+    });
+    return () => {
+      back.remove();
+      unsub();
+    };
+  }, [locked, navigation, run]);
+
+  return run;
 }

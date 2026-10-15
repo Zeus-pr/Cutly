@@ -15,6 +15,8 @@ suite('#46 delete re-auth API (database)', () => {
   let server: Server;
   let prisma: import('@prisma/client').PrismaClient;
   let signToken: typeof import('../backend/src/auth').signToken;
+  let verifyPhoneOtp: typeof import('../backend/src/auth').verifyPhoneOtp;
+  let finishGoogleSignIn: typeof import('../backend/src/auth').finishGoogleSignIn;
   const tag = `i46${Date.now().toString(36)}`;
   let seq = 0;
   const uniquePhone = () => `+9190${String(Date.now() + ++seq).slice(-8)}`;
@@ -25,7 +27,7 @@ suite('#46 delete re-auth API (database)', () => {
     process.env.PHONE_HASH_KEY = 'test-phone-hash-key-0123456789';
     const { PrismaClient } = await import('@prisma/client');
     prisma = new PrismaClient();
-    ({ signToken } = await import('../backend/src/auth'));
+    ({ signToken, verifyPhoneOtp, finishGoogleSignIn } = await import('../backend/src/auth'));
     const mod = await import('../backend/src/server');
     server = mod.app.listen(0, '127.0.0.1');
     await new Promise((r) => server.once('listening', r));
@@ -88,6 +90,58 @@ suite('#46 delete re-auth API (database)', () => {
     expect(first.body.data.restored).toBe(true);
     const second = await call('POST', '/api/auth/login', { body: { email, password: 'password123' } });
     expect(second.body.data.restored).toBe(false);
+  });
+
+  it('OTP sign-in inside grace returns restored: true once (stubbed OTP check)', async () => {
+    const { user } = await customer({ deletionRequestedAt: new Date(Date.now() - 86_400_000) });
+    const approve = { checkOtp: async () => true };
+    const first = await verifyPhoneOtp(user.phone!, '123456', undefined, approve);
+    expect(first.restored).toBe(true);
+    expect(first.user.id).toBe(user.id);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).deletionRequestedAt).toBeNull();
+    expect((await verifyPhoneOtp(user.phone!, '123456', undefined, approve)).restored).toBe(false);
+    await expect(verifyPhoneOtp(user.phone!, '000000', undefined, { checkOtp: async () => false })).rejects.toThrow();
+  });
+
+  it('Google sign-in inside grace returns restored: true (googleSub row and pending email owner)', async () => {
+    const pendingAt = () => new Date(Date.now() - 86_400_000);
+    // 1) Row already linked by googleSub.
+    const sub = `g-${tag}-sub`;
+    const { user: bySub } = await customer({ googleSub: sub, deletionRequestedAt: pendingAt() });
+    const a = await finishGoogleSignIn(sub, null, null);
+    expect(a).toMatchObject({ restored: true, user: { id: bySub.id } });
+    expect((await finishGoogleSignIn(sub, null, null)).restored).toBe(false);
+    // 2) Pending owner found by verified email, not yet linked (restoredOwnerId path).
+    const email = `${tag}-go@example.com`;
+    const { user: owner } = await customer({ email, emailVerified: true, deletionRequestedAt: pendingAt() });
+    const sub2 = `g-${tag}-owner`;
+    const b = await finishGoogleSignIn(sub2, email, 'Owner');
+    expect(b).toMatchObject({ restored: true, user: { id: owner.id } });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: owner.id } })).googleSub).toBe(sub2);
+    expect((await finishGoogleSignIn(sub2, email, 'Owner')).restored).toBe(false);
+  });
+
+  it('PARTNER_RESTORE_SHOP_STATUS=CLOSED: restored partner can reopen the CLOSED shop', async () => {
+    const prev = process.env.PARTNER_RESTORE_SHOP_STATUS;
+    process.env.PARTNER_RESTORE_SHOP_STATUS = 'CLOSED';
+    try {
+      const email = `${tag}-pc@example.com`;
+      const partner = await prisma.partner.create({
+        data: { email, passwordHash: await bcrypt.hash('password123', 4), deletionRequestedAt: new Date(Date.now() - 86_400_000) }
+      });
+      await prisma.shop.create({ data: { name: 'P3c', address: 'a', city: 'c', latitude: 1, longitude: 1, setupDone: true, ownerPartnerId: partner.id, status: 'CLOSED', isActive: false } });
+      const r = await call('POST', '/api/partner/login', { body: { email, password: 'password123' } });
+      expect(r.body.data.restored).toBe(true);
+      expect((await prisma.shop.findUniqueOrThrow({ where: { ownerPartnerId: partner.id } })).status).toBe('CLOSED');
+      const fresh = await prisma.partner.findUniqueOrThrow({ where: { id: partner.id } });
+      const t = signToken({ id: partner.id, email, phone: null, name: null }, 'partner', fresh.tokenVersion);
+      const open = await call('PATCH', '/api/partner/accepting', { token: t, body: { mode: 'open' } });
+      expect(open.status).toBe(200);
+      expect(open.body.data.status).toBe('ACTIVE');
+    } finally {
+      if (prev === undefined) delete process.env.PARTNER_RESTORE_SHOP_STATUS;
+      else process.env.PARTNER_RESTORE_SHOP_STATUS = prev;
+    }
   });
 
   it('partner login inside grace returns restored: true and the shop PAUSED', async () => {

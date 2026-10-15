@@ -106,10 +106,7 @@ export function tokenVersionMatches(payload: object, tokenVersion: number) {
   return tv === tokenVersion;
 }
 
-/** #46: rows that signInGate just brought back from a pending deletion. */
-const restoredRows = new WeakSet<User>();
-
-function session(user: User, restored = restoredRows.has(user)) {
+function session(user: User, restored = false) {
   const profile = publicUser(user);
   // `restored: true` only on the sign-in that cancelled a pending deletion (app shows C9 once).
   return { token: signToken(profile, 'customer', user.tokenVersion), user: profile, restored };
@@ -121,11 +118,14 @@ export const ACCOUNT_PENDING_DELETION = () =>
 /**
  * T3: a sign-in inside the grace window restores the account (nothing was blanked).
  * Past the deadline it is treated as purged → the caller's generic auth failure.
- * Returns the usable row, or null when the sign-in must fail.
+ * Returns the usable row plus whether this sign-in restored it (#46: drives `restored`),
+ * or null when the sign-in must fail.
  */
-async function signInGate(user: User, now = new Date()): Promise<User | null> {
+type GateResult = { user: User; restored: boolean };
+
+async function signInGate(user: User, now = new Date()): Promise<GateResult | null> {
   const state = deletionState(user, now);
-  if (state === 'active') return user;
+  if (state === 'active') return { user, restored: false };
   if (state !== 'pending') return null;
   const restored = await prisma.user.updateMany({
     where: { id: user.id, deletedAt: null, deletionRequestedAt: user.deletionRequestedAt },
@@ -133,8 +133,7 @@ async function signInGate(user: User, now = new Date()): Promise<User | null> {
   });
   if (restored.count !== 1) return null;
   const row = await prisma.user.findUnique({ where: { id: user.id } });
-  if (row) restoredRows.add(row);
-  return row;
+  return row ? { user: row, restored: true } : null;
 }
 
 /** SEC-08: same message for email/phone taken — no account enumeration. */
@@ -267,7 +266,7 @@ export async function signIn(email: string, password: string) {
   for (const user of matches) {
     if (user.passwordHash && (await bcrypt.compare(password, user.passwordHash))) {
       const usable = await signInGate(user);
-      if (usable) return session(usable);
+      if (usable) return session(usable.user, usable.restored);
     }
   }
   throw new Error('Email or password is incorrect.');
@@ -494,7 +493,7 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
   if (subRow && isDeletionRequested(subRow)) {
     const usable = await signInGate(subRow);
     if (!usable) throw new Error(GOOGLE_SIGN_IN_FAILED);
-    return session(usable);
+    return session(usable.user, usable.restored);
   }
   const bySub = subRow;
   let emailRows = email ? await findUsersByEmail(email) : [];
@@ -617,8 +616,13 @@ export async function checkPhoneOtpCode(phone: string, code: string) {
   return status === 'approved';
 }
 
-export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: string) {
-  if (!(await checkPhoneOtpCode(phone, code))) throw new Error('That code is incorrect or expired.');
+export async function verifyPhoneOtp(
+  phone: string,
+  code: string,
+  mergeToken?: string,
+  deps: { checkOtp: (phone: string, code: string) => Promise<boolean> } = { checkOtp: checkPhoneOtpCode }
+) {
+  if (!(await deps.checkOtp(phone, code))) throw new Error('That code is incorrect or expired.');
   await prisma.phoneOtp.deleteMany({ where: { phone } });
 
   const byPhone = await prisma.user.findUnique({ where: { phone } });
@@ -661,7 +665,7 @@ export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: s
     // T3: OTP sign-in is the restore path inside the grace window.
     const usable = await signInGate(byPhone);
     if (!usable) throw new Error('That code is incorrect or expired.');
-    return session(usable);
+    return session(usable.user, usable.restored);
   }
   const user = byPhone || (await prisma.user.create({ data: { phone } }));
   return session(user);

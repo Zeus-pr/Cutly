@@ -12,8 +12,13 @@ import {
   mmss,
   pickReauthMethod,
   reauthOutcome,
-  secondsLeft
+  secondsLeft,
+  holdGrant,
+  liveGrant,
+  shouldAutoSend,
+  OTP_AUTOSEND_COOLDOWN_MS
 } from '../utils/deleteFlow';
+import { partnerAcceptingCopy } from '../utils/partnerAccepting';
 
 describe('#46 pickReauthMethod', () => {
   it('phone → OTP, Google offered when linked', () => {
@@ -88,5 +93,26 @@ describe('#46 P3 PAUSED shop on Partner Home', () => {
     expect(partnerAcceptingCopy(paused).body).toMatch(/Turn bookings back on/);
     expect(isPartnerBookableNow({ ...paused, status: 'ACTIVE' })).toBe(true);
     expect(isPartnerBookableNow({ acceptingAppointments: true, acceptingPausedUntil: null })).toBe(true);
+  });
+});
+
+describe('#46 PR review: grant reuse, OTP auto-send, copy', () => {
+  it('a held grant stays usable until 10 s before it expires', () => {
+    const g = holdGrant({ reauthToken: 't', expiresIn: 300 }, 1_000_000);
+    expect(liveGrant(g, 1_000_000 + 289_000)).toBe(g);
+    expect(liveGrant(g, 1_000_000 + 291_000)).toBeNull();
+    expect(liveGrant(null)).toBeNull();
+  });
+  it('auto-send skips when a code went out within the cooldown', () => {
+    expect(shouldAutoSend(null, 5)).toBe(true);
+    expect(shouldAutoSend(1000, 1000 + OTP_AUTOSEND_COOLDOWN_MS - 1)).toBe(false);
+    expect(shouldAutoSend(1000, 1000 + OTP_AUTOSEND_COOLDOWN_MS)).toBe(true);
+  });
+  it('REAUTH_BAD_REQUEST uses neutral copy', () => {
+    const out = reauthOutcome(apiErrorFrom(400, { error: 'x', code: 'REAUTH_BAD_REQUEST' }));
+    expect(out).toEqual({ kind: 'failed', message: 'Something’s missing. Try again.' });
+  });
+  it('a restored CLOSED shop gets the turn-bookings-back-on copy', () => {
+    expect(partnerAcceptingCopy({ acceptingAppointments: true, acceptingPausedUntil: null, status: 'CLOSED' }).kicker).toBe('Not taking appointments');
   });
 });

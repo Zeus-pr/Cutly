@@ -92,6 +92,28 @@ export type ReauthOutcome =
 
 export const REAUTH_FAILED_COPY = 'We could not confirm it’s you. Try again.';
 
+/** A re-auth grant held on the client, with an absolute expiry. */
+export type HeldGrant = { reauthToken: string; expiresAt: number };
+
+/** Safety margin so we never send a grant that expires in flight. */
+const GRANT_MARGIN_MS = 10_000;
+
+export function holdGrant(grant: { reauthToken: string; expiresIn: number }, now = Date.now()): HeldGrant {
+  return { reauthToken: grant.reauthToken, expiresAt: now + grant.expiresIn * 1000 };
+}
+
+/** The grant if it can still be used for DELETE, else null. A failed DELETE does not consume it. */
+export function liveGrant(grant: HeldGrant | null, now = Date.now()): HeldGrant | null {
+  return grant && grant.expiresAt - GRANT_MARGIN_MS > now ? grant : null;
+}
+
+/** Re-auth OTP auto-send cooldown (at least the server’s 30 s per-phone send cooldown). */
+export const OTP_AUTOSEND_COOLDOWN_MS = 60_000;
+
+export function shouldAutoSend(lastSentAt: number | null, now = Date.now()): boolean {
+  return lastSentAt === null || now - lastSentAt >= OTP_AUTOSEND_COOLDOWN_MS;
+}
+
 /** Map a POST /reauth (or re-auth OTP send) failure to the screen state. */
 export function reauthOutcome(error: unknown, now = Date.now()): ReauthOutcome {
   if (!(error instanceof ApiError)) {
@@ -102,7 +124,7 @@ export function reauthOutcome(error: unknown, now = Date.now()): ReauthOutcome {
     return { kind: 'failed', message: error.message || REAUTH_FAILED_COPY, attemptsRemaining: error.attemptsRemaining };
   }
   if (error.status === 401) return { kind: 'signedOut' };
-  if (error.code === 'REAUTH_BAD_REQUEST') return { kind: 'failed', message: 'Enter the 6-digit code.' };
+  if (error.code === 'REAUTH_BAD_REQUEST') return { kind: 'failed', message: 'Something’s missing. Try again.' };
   return { kind: 'error', message: error.message };
 }
 
