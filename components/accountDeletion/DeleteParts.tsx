@@ -55,9 +55,10 @@ export function deleteStyles(c: Palette) {
     orRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     orLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: c.line },
     orText: { fontFamily: fontFamily.medium, fontSize: 12, letterSpacing: 1, color: c.muted },
-    field: { position: 'relative' },
+    field: { position: 'relative', width: '100%', alignSelf: 'stretch' },
     input: { height: 54, borderRadius: radii.md, borderWidth: 1, borderColor: c.line, backgroundColor: c.surface, paddingHorizontal: spacing.md, paddingRight: 48, fontFamily: fontFamily.medium, fontSize: 16, color: c.ink },
-    eye: { position: 'absolute', right: 4, top: 5, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    eyeSlot: { position: 'absolute', top: 0, bottom: 0, right: 4, justifyContent: 'center' },
+    eye: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
     kicker: { fontFamily: fontFamily.bold, fontSize: 13, letterSpacing: 1.6, color: c.accent, textTransform: 'uppercase' },
     displayTitle: { ...typography.display, fontWeight: undefined, color: c.ink, fontSize: 30, lineHeight: 36, letterSpacing: -0.7 },
     body: { fontFamily: fontFamily.regular, fontSize: 15, lineHeight: 21, color: c.muted },
@@ -213,9 +214,12 @@ export function PasswordField({ value, onChange, onSubmit, editable = true }: { 
         accessibilityLabel="Password"
         autoFocus
       />
-      <PressScale onPress={() => setShow((v) => !v)} style={s.eye} accessibilityLabel={show ? 'Hide password' : 'Show password'} pressedScale={0.9}>
-        <Ionicons name={show ? 'eye-off-outline' : 'eye-outline'} size={20} color={c.muted} />
-      </PressScale>
+      {/* Plain View owns the absolute position: PressScale's style lands on an inner view, which web ignores. */}
+      <View style={s.eyeSlot} pointerEvents="box-none">
+        <PressScale onPress={() => setShow((v) => !v)} style={s.eye} accessibilityLabel={show ? 'Hide password' : 'Show password'} pressedScale={0.9}>
+          <Ionicons name={show ? 'eye-off-outline' : 'eye-outline'} size={20} color={c.muted} />
+        </PressScale>
+      </View>
     </View>
   );
 }

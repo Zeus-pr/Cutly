@@ -101,12 +101,16 @@ export function clientKey(req: Parameters<typeof getClientIp>[0], suffix: string
   return `${suffix}:${rateLimitIpKey(getClientIp(req))}`;
 }
 
-/** "45s" / "3 min" / "1 hr" — human wait for 429 copy (#46: no raw seconds in the app). */
+/**
+ * "45s" / "3 min" / "1 hr" — human wait for 429 copy (#46: no raw seconds in the app).
+ * Floors: windows carry up to +60 s jitter (jitteredTtlMs), so 900–959 s must read "15 min",
+ * not "16 min". The app's C6 ring shows the exact mm:ss.
+ */
 export function humanWait(sec: number): string {
   if (sec < 60) return `${sec}s`;
-  const min = Math.ceil(sec / 60);
+  const min = Math.floor(sec / 60);
   if (min < 60) return `${min} min`;
-  return `${Math.ceil(min / 60)} hr`;
+  return `${Math.floor(min / 60)} hr`;
 }
 
 /**
