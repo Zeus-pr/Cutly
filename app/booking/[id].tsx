@@ -24,6 +24,7 @@ import { isVisitTab } from '@/store/useVisitTabStore';
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
 import { formatINR } from '@/utils/money';
 import { formatDateLong, formatTime } from '@/utils/time';
+import { SUPPORT_WHATSAPP_URL } from '@/constants/support';
 
 function totalLine(status: string, totalPaise: number, remainingPaise: number, billSettled: boolean) {
   const amount = `Total ${formatINR(totalPaise)}`;
@@ -218,7 +219,7 @@ export default function BookingDetails() {
         <View style={[styles.topSide, styles.topSideEnd]}>
           <PressScale
             style={styles.support}
-            onPress={() => void Linking.openURL('https://wa.me/919000000000')}
+            onPress={() => void Linking.openURL(SUPPORT_WHATSAPP_URL)}
             haptic
           >
             <Ionicons name="headset-outline" size={18} color={colors.accent} />

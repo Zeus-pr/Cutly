@@ -24,6 +24,7 @@ import { auth, refreshProfile, updateProfile } from '@/services/auth';
 import { appAlert } from '@/store/useDialogStore';
 import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
 import { useSessionStore } from '@/store/useSessionStore';
+import { SUPPORT_WHATSAPP_URL } from '@/constants/support';
 
 /** Same options as complete-profile. */
 const GENDERS = [
@@ -146,7 +147,7 @@ export default function Profile() {
     {
       label: 'Contact Us',
       icon: 'logo-whatsapp',
-      onPress: () => void Linking.openURL('https://wa.me/919000000000')
+      onPress: () => void Linking.openURL(SUPPORT_WHATSAPP_URL)
     },
     ...(googleLinked
       ? []
