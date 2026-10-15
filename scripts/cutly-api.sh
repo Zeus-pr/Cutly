@@ -8,8 +8,11 @@ RUN="$ROOT/.run"
 LOG="$RUN/cutly-api.log"
 PIDFILE="$RUN/cutly-api.pid"
 PORT=4000
+# T2: admin routes live on a separate loopback-only listener.
+ADMIN_PORT=4001
+ADMIN_HEALTH="http://127.0.0.1:${ADMIN_PORT}/api/admin/ping"
 HEALTH="http://127.0.0.1:${PORT}/health"
-SERVER="$ROOT/backend/src/server.ts"
+SERVER="$ROOT/backend/src/main.ts"
 
 # launchd PATH is tiny — Homebrew node must be explicit.
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
@@ -23,7 +26,15 @@ TSX_BIN="$ROOT/node_modules/.bin/tsx"
 mkdir -p "$RUN"
 
 health_ok() {
-  curl -sf --max-time 2 "$HEALTH" >/dev/null 2>&1
+  curl -sf --max-time 2 "$HEALTH" >/dev/null 2>&1 || return 1
+  # Admin listener answers 401/503 without the secret — any HTTP reply means it is up.
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$ADMIN_HEALTH" 2>/dev/null || true)"
+  [[ -n "$code" && "$code" != "000" ]]
+}
+
+admin_listener_pid() {
+  lsof -nP -iTCP:"$ADMIN_PORT" -sTCP:LISTEN -t 2>/dev/null | head -1 || true
 }
 
 listener_pid() {
@@ -53,13 +64,14 @@ start_api() {
     return 0
   fi
 
-  # Clear stale / dead listeners on :4000
+  # Clear stale / dead listeners on :4000 and :4001
   local old
-  old="$(listener_pid)"
-  if [[ -n "${old:-}" ]]; then
-    kill "$old" 2>/dev/null || true
-    sleep 0.4
-  fi
+  for old in "$(listener_pid)" "$(admin_listener_pid)"; do
+    if [[ -n "${old:-}" ]]; then
+      kill "$old" 2>/dev/null || true
+      sleep 0.4
+    fi
+  done
 
   cd "$ROOT"
   # Detach fully so Cursor/agent shell exit cannot kill the API
@@ -102,7 +114,9 @@ stop_api() {
     [[ -n "${saved:-}" ]] && kill "$saved" 2>/dev/null || true
     rm -f "$PIDFILE"
   fi
-  echo "API stopped (port $PORT)"
+  p="$(admin_listener_pid)"
+  [[ -n "${p:-}" ]] && kill "$p" 2>/dev/null || true
+  echo "API stopped (ports $PORT, $ADMIN_PORT)"
 }
 
 status_api() {
