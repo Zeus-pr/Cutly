@@ -38,14 +38,11 @@ export function deletedIdentityRetentionDays() {
  * Product calls pending with Prajesh. Defaults follow the decisions log (round 2).
  * - formerCustomerDuringGrace: partners/public see "Former customer" (and no phone) from the request.
  * - partnerSelfDelete: partners may delete their own account (only with zero upcoming bookings).
- * - partnerRestoreShopStatus: what a CLOSED shop becomes when the partner restores. Never ACTIVE.
  */
 export function deletionFlags() {
-  const restore = (process.env.PARTNER_RESTORE_SHOP_STATUS || '').trim().toUpperCase();
   return {
     formerCustomerDuringGrace: envFlag('DELETION_FORMER_CUSTOMER_DURING_GRACE', true),
-    partnerSelfDelete: envFlag('PARTNER_SELF_DELETE_ENABLED', true),
-    partnerRestoreShopStatus: (restore === 'CLOSED' ? 'CLOSED' : 'PAUSED') as Extract<ShopStatus, 'PAUSED' | 'CLOSED'>
+    partnerSelfDelete: envFlag('PARTNER_SELF_DELETE_ENABLED', true)
   };
 }
 

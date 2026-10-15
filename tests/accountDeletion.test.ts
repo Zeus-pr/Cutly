@@ -20,8 +20,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const envKeys = [
   'ACCOUNT_DELETION_GRACE_DAYS',
   'DELETION_FORMER_CUSTOMER_DURING_GRACE',
-  'PARTNER_SELF_DELETE_ENABLED',
-  'PARTNER_RESTORE_SHOP_STATUS'
+  'PARTNER_SELF_DELETE_ENABLED'
 ];
 afterEach(() => {
   for (const key of envKeys) delete process.env[key];
@@ -85,19 +84,8 @@ describe('"Former customer" display (T3-Q3)', () => {
 });
 
 describe('product flags', () => {
-  it('defaults: self-delete on, restore to PAUSED', () => {
-    expect(deletionFlags()).toEqual({
-      formerCustomerDuringGrace: true,
-      partnerSelfDelete: true,
-      partnerRestoreShopStatus: 'PAUSED'
-    });
-  });
-
-  it('restore never reopens as ACTIVE', () => {
-    process.env.PARTNER_RESTORE_SHOP_STATUS = 'ACTIVE';
-    expect(deletionFlags().partnerRestoreShopStatus).toBe('PAUSED');
-    process.env.PARTNER_RESTORE_SHOP_STATUS = 'closed';
-    expect(deletionFlags().partnerRestoreShopStatus).toBe('CLOSED');
+  it('defaults: self-delete on, former-customer masking on', () => {
+    expect(deletionFlags()).toEqual({ formerCustomerDuringGrace: true, partnerSelfDelete: true });
   });
 
   it('self-delete can be switched to ops-only', () => {

@@ -23,7 +23,7 @@ export function partnerAcceptingCopy(shop: Pick<PartnerShop, 'acceptingAppointme
       body: 'Customers can book within your open hours.'
     };
   }
-  if (shop.status === 'PAUSED' || shop.status === 'CLOSED') {
+  if (shop.status === 'PAUSED') {
     return {
       kicker: 'Not taking appointments',
       body: 'Your shop is paused. Turn bookings back on when you’re ready.'

@@ -151,29 +151,6 @@ suite('#46 delete re-auth API (database)', () => {
     expect((await finishGoogleSignIn(sub2, email, 'Owner')).restored).toBe(false);
   });
 
-  it('PARTNER_RESTORE_SHOP_STATUS=CLOSED: restored partner can reopen the CLOSED shop', async () => {
-    const prev = process.env.PARTNER_RESTORE_SHOP_STATUS;
-    process.env.PARTNER_RESTORE_SHOP_STATUS = 'CLOSED';
-    try {
-      const email = `${tag}-pc@example.com`;
-      const partner = await prisma.partner.create({
-        data: { email, passwordHash: await bcrypt.hash('password123', 4), deletionRequestedAt: new Date(Date.now() - 86_400_000) }
-      });
-      await prisma.shop.create({ data: { name: 'P3c', address: 'a', city: 'c', latitude: 1, longitude: 1, setupDone: true, ownerPartnerId: partner.id, status: 'CLOSED', isActive: false } });
-      const r = await call('POST', '/api/partner/login', { body: { email, password: 'password123' } });
-      expect(r.body.data.restored).toBe(true);
-      expect((await prisma.shop.findUniqueOrThrow({ where: { ownerPartnerId: partner.id } })).status).toBe('CLOSED');
-      const fresh = await prisma.partner.findUniqueOrThrow({ where: { id: partner.id } });
-      const t = signToken({ id: partner.id, email, phone: null, name: null }, 'partner', fresh.tokenVersion);
-      const open = await call('PATCH', '/api/partner/accepting', { token: t, body: { mode: 'open' } });
-      expect(open.status).toBe(200);
-      expect(open.body.data.status).toBe('ACTIVE');
-    } finally {
-      if (prev === undefined) delete process.env.PARTNER_RESTORE_SHOP_STATUS;
-      else process.env.PARTNER_RESTORE_SHOP_STATUS = prev;
-    }
-  });
-
   it('partner login inside grace returns restored: true and the shop PAUSED', async () => {
     const email = `${tag}-pr@example.com`;
     const partner = await prisma.partner.create({

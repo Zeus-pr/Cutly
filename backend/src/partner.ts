@@ -93,8 +93,8 @@ export async function partnerFromToken(token: string) {
 }
 
 /**
- * T3-Q11: partner sign-in inside the grace window restores the account; the shop goes
- * CLOSED → PAUSED (never straight to ACTIVE). Past the deadline: null (generic failure).
+ * T3-Q11 (approved rule): partner sign-in inside the grace window restores the account; the
+ * shop goes CLOSED → PAUSED (never straight to ACTIVE), and the partner reopens it from P3. Past the deadline: null (generic failure).
  */
 async function partnerSignInGate<T extends { id: string; deletionRequestedAt: Date | null; deletedAt: Date | null }>(
   partner: T,
@@ -111,7 +111,7 @@ async function partnerSignInGate<T extends { id: string; deletionRequestedAt: Da
     if (restored.count !== 1) return false;
     await tx.shop.updateMany({
       where: { ownerPartnerId: partner.id, status: 'CLOSED', deletedAt: null },
-      data: shopStatusData(deletionFlags().partnerRestoreShopStatus)
+      data: shopStatusData('PAUSED')
     });
     return 'restored' as const;
   });
@@ -447,12 +447,8 @@ export async function setPartnerAcceptingAppointments(token: string, mode: Partn
     };
   }
 
-  // #46 (P3): a restored shop (PAUSED, or CLOSED with PARTNER_RESTORE_SHOP_STATUS=CLOSED) comes
-  // back to ACTIVE only when the partner opens it. CLOSED is otherwise only set by delete/purge,
-  // so an un-purged CLOSED shop owned by a partner who isn't pending deletion (partnerFromToken
-  // rejects pending partners) is a restored shop.
-  const restoredShop = (shop.status === 'PAUSED' || shop.status === 'CLOSED') && !shop.deletedAt;
-  const reopen = mode === 'open' && restoredShop ? shopStatusData('ACTIVE') : {};
+  // #46 (P3): a restored shop comes back PAUSED and returns to ACTIVE only when the partner opens it.
+  const reopen = mode === 'open' && shop.status === 'PAUSED' ? shopStatusData('ACTIVE') : {};
   await prisma.shop.update({ where: { id: shop.id }, data: { ...data, ...reopen } });
   return shopFor(partner.id);
 }

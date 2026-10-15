@@ -118,6 +118,8 @@ export default function DeleteAccountScreen() {
   const openMethod = useCallback(
     (m: ReauthMethod | null) => {
       if (retryAt && retryAt > Date.now()) return goRate(retryAt);
+      // Still holding a valid grant (back to C1, or C6 "Try again"): go straight to DELETE, no new SMS.
+      if (liveGrant(grantRef.current)) return void confirm(null);
       setMethod(m);
       setError('');
       setHint('');

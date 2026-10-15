@@ -18,7 +18,6 @@ import {
   shouldAutoSend,
   OTP_AUTOSEND_COOLDOWN_MS
 } from '../utils/deleteFlow';
-import { partnerAcceptingCopy } from '../utils/partnerAccepting';
 
 describe('#46 pickReauthMethod', () => {
   it('phone → OTP, Google offered when linked', () => {
@@ -111,8 +110,5 @@ describe('#46 PR review: grant reuse, OTP auto-send, copy', () => {
   it('REAUTH_BAD_REQUEST uses neutral copy', () => {
     const out = reauthOutcome(apiErrorFrom(400, { error: 'x', code: 'REAUTH_BAD_REQUEST' }));
     expect(out).toEqual({ kind: 'failed', message: 'Something’s missing. Try again.' });
-  });
-  it('a restored CLOSED shop gets the turn-bookings-back-on copy', () => {
-    expect(partnerAcceptingCopy({ acceptingAppointments: true, acceptingPausedUntil: null, status: 'CLOSED' }).kicker).toBe('Not taking appointments');
   });
 });

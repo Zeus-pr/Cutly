@@ -78,4 +78,3 @@ shop comes back **paused**, so the owner turns bookings back on from Partner Hom
 | `DELETED_IDENTITY_RETENTION_DAYS` | `365` | Phone fingerprint retention |
 | `DELETION_FORMER_CUSTOMER_DURING_GRACE` | `1` | Show "Former customer" during grace (product call pending) |
 | `PARTNER_SELF_DELETE_ENABLED` | `1` | `0` = partner delete is ops-only (product call pending) |
-| `PARTNER_RESTORE_SHOP_STATUS` | `PAUSED` | Shop status after partner restore; never `ACTIVE` (product call pending) |
