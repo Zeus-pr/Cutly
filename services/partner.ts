@@ -1,6 +1,7 @@
 import type { CatalogueService, ShopKindId } from '@/constants/catalogue';
 import { getApiBaseUrl } from '@/services/apiBase';
 import { useSessionStore } from '@/store/useSessionStore';
+import { confirmAndDeletePartner } from '@/services/accountDeletion';
 
 const base = getApiBaseUrl();
 
@@ -18,6 +19,8 @@ export type PartnerShop = {
   productBrands?: string[];
   chairCount: number;
   setupDone: boolean;
+  /** ACTIVE | PAUSED | CLOSED — PAUSED after a restore until the partner opens bookings. */
+  status?: 'ACTIVE' | 'PAUSED' | 'CLOSED';
   acceptingAppointments?: boolean;
   /** ISO — pause new bookings for today only until shop close (IST). */
   acceptingPausedUntil?: string | null;
@@ -144,11 +147,13 @@ export const partnerApi = {
     save(session);
   },
   signIn: async (email: string, password: string) => {
-    const session = await call<{ token: string; partner: { email: string | null; name: string | null }; shop: PartnerShop | null }>('/partner/login', {
+    const session = await call<{ token: string; partner: { email: string | null; name: string | null }; shop: PartnerShop | null; restored?: boolean }>('/partner/login', {
       method: 'POST',
       body: JSON.stringify({ email, password })
     });
     save(session);
+    // #46 P3: this sign-in cancelled a pending deletion; Partner Home shows the banner once.
+    useSessionStore.getState().setRestoredNotice(session.restored ? 'partner' : null);
     return session.shop;
   },
   setup: async (body: {
@@ -234,7 +239,8 @@ export const partnerApi = {
       method: 'PATCH',
       body: JSON.stringify({ status })
     }),
-  deleteAccount: () => call<{ deleted: boolean }>('/partner/account', { method: 'DELETE' }),
+  /** #46: password re-auth, then DELETE with X-Reauth-Token. Throws ApiError (utils/deleteFlow). */
+  deleteAccount: (password: string) => confirmAndDeletePartner(password),
   registerPush: (pushToken: string) =>
     call<{ saved: boolean }>('/partner/push/register', {
       method: 'POST',

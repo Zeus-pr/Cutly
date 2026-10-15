@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { create } from 'zustand';
+import type { AuthMethod } from '@/utils/deleteFlow';
 
 export type Audience = 'customer' | 'partner';
 
@@ -13,6 +14,15 @@ type SessionState = {
   /** YYYY-MM-DD from the native date picker. */
   dateOfBirth: string | null;
   googleLinked: boolean;
+  /** #46: from /auth/me — picks the re-auth method for Delete account. */
+  hasPassword: boolean;
+  authMethods: AuthMethod[] | null;
+  /** #46: set by a sign-in that cancelled a pending deletion (C9 / P3), cleared once shown. */
+  restoredNotice: Audience | null;
+  /** #46: epoch ms when re-auth may be tried again after a 429 (session-only, survives navigation). */
+  reauthRetryAt: number | null;
+  setRestoredNotice: (audience: Audience | null) => void;
+  setReauthRetryAt: (retryAt: number | null) => void;
   city: string;
   introDone: boolean;
   /** Session-only: PatternWaves launch → Get Started tapped. */
@@ -33,6 +43,8 @@ type SessionState = {
     gender?: string | null;
     dateOfBirth?: string | null;
     googleLinked?: boolean;
+    hasPassword?: boolean;
+    authMethods?: AuthMethod[] | null;
   }) => void;
   setCity: (city: string) => void;
   passIntro: () => void;
@@ -75,6 +87,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   gender: null,
   dateOfBirth: null,
   googleLinked: false,
+  hasPassword: false,
+  authMethods: null,
+  restoredNotice: null,
+  reauthRetryAt: null,
+  setRestoredNotice: (restoredNotice) => set({ restoredNotice }),
+  setReauthRetryAt: (reauthRetryAt) => set({ reauthRetryAt }),
   city: 'Burdwan',
   introDone: false,
   launchDone: false,
@@ -97,7 +115,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       name: profile.name === undefined ? get().name : profile.name,
       gender: profile.gender === undefined ? get().gender : profile.gender,
       dateOfBirth: profile.dateOfBirth === undefined ? get().dateOfBirth : profile.dateOfBirth,
-      googleLinked: profile.googleLinked === undefined ? get().googleLinked : profile.googleLinked
+      googleLinked: profile.googleLinked === undefined ? get().googleLinked : profile.googleLinked,
+      hasPassword: profile.hasPassword === undefined ? get().hasPassword : profile.hasPassword,
+      authMethods: profile.authMethods === undefined ? get().authMethods : profile.authMethods
     };
     set(next);
     void SecureStore.setItemAsync(phoneKey, next.phone || '');
@@ -188,6 +208,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       gender: null,
       dateOfBirth: null,
       googleLinked: false,
+      hasPassword: false,
+      authMethods: null,
+      reauthRetryAt: null,
       introDone: false,
       launchDone: false,
       audience: null
