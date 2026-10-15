@@ -7,6 +7,14 @@ const API_BASE =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE) ||
   'http://127.0.0.1:4001/api';
 
+/**
+ * Partner routes (`/api/partner/*`) live only on the public app (:4000). The admin listener
+ * (:4001) 404s every non-admin path before CORS runs, so the browser reports "Failed to fetch".
+ */
+const PARTNER_API_BASE =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PARTNER_API_BASE) ||
+  'http://127.0.0.1:4000/api';
+
 export function getAdminSecret() {
   return sessionStorage.getItem(SECRET_KEY) || '';
 }
@@ -89,7 +97,7 @@ export async function partnerFetch<T>(path: string, init: RequestInit = {}): Pro
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${token}`);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-  const res = await fetchWithRetry(`${API_BASE}${path}`, { ...init, headers });
+  const res = await fetchWithRetry(`${PARTNER_API_BASE}${path}`, { ...init, headers });
   return parse<T>(res);
 }
 
