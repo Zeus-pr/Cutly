@@ -118,7 +118,7 @@ export default function NotificationsScreen() {
                 </Text>
                 {unread ? <View style={styles.dot} /> : null}
               </View>
-              <Text style={styles.cardBody} numberOfLines={2}>
+              <Text style={styles.cardBody} numberOfLines={item.type === 'email_released' ? undefined : 2 /* V17: full body */}>
                 {item.body}
               </Text>
               <Text style={styles.when}>{formatDateTime(item.createdAt)}</Text>

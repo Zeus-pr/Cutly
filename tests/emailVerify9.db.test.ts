@@ -378,6 +378,47 @@ suite('T4 #9 email verification (database)', () => {
     await expect(E.sendVerifyExisting(token, deps())).rejects.toMatchObject({ code: 'ALREADY_VERIFIED' });
   });
 
+  it('Security #58: email change checks re-auth BEFORE "taken" (no enumeration); a taken address keeps the grant', async () => {
+    const taken = addr('enum');
+    await prisma.user.create({ data: { email: taken, emailVerified: true, phone: phone() } });
+    const u = await prisma.user.create({ data: { email: addr('enumme'), emailVerified: true, phone: phone() } });
+    const token = tokenFor(u);
+    const noGrant = await call('POST', '/api/auth/email/change', { token, body: { newEmail: taken } });
+    expect(noGrant.body.code).toBe('REAUTH_REQUIRED');
+    const free = await call('POST', '/api/auth/email/change', { token, body: { newEmail: addr('enumfree') } });
+    expect(free.body.code).toBe('REAUTH_REQUIRED'); // same answer for taken and free
+    const { issueReauthToken } = await import('../backend/src/reauth');
+    const g = await issueReauthToken(prisma, 'test-jwt-secret-for-t4', u.id, 'customer', new Date(), 'change_email');
+    await expect(E.requestEmailChange(token, g.reauthToken, taken, deps())).rejects.toMatchObject({ code: 'EMAIL_TAKEN' });
+    // grant rolled back with the refusal, so the user can fix the typo without re-auth
+    await expect(E.requestEmailChange(token, g.reauthToken, addr('enumok'), deps())).resolves.toMatchObject({ resendInSec: 60 });
+  });
+
+  it('F4: refused change requests (no grant / taken) do not use up the hourly send limit', async () => {
+    const taken = addr('f4t');
+    await prisma.user.create({ data: { email: taken, emailVerified: true, phone: phone() } });
+    const u = await prisma.user.create({ data: { email: addr('f4me'), emailVerified: true, phone: phone() } });
+    const token = tokenFor(u);
+    for (let i = 0; i < 6; i++) {
+      const r = await call('POST', '/api/auth/email/change', { token, body: { newEmail: taken } });
+      expect(r.status).not.toBe(429);
+    }
+    const { issueReauthToken } = await import('../backend/src/reauth');
+    const g = await issueReauthToken(prisma, 'test-jwt-secret-for-t4', u.id, 'customer', new Date(), 'change_email');
+    const ok = await call('POST', '/api/auth/email/change', { token, reauth: g.reauthToken, body: { newEmail: addr('f4new') } });
+    expect(ok.status).toBe(200);
+  });
+
+  it('F4: a resend refused by the 60 s cooldown does not use up an address send', async () => {
+    const { rateLimit, refundRateLimit } = await import('../backend/src/rateLimit');
+    const k = `t4-refund-${tag}`;
+    for (let i = 0; i < 3; i++) await rateLimit(k, 3, 60_000);
+    expect((await rateLimit(k, 3, 60_000)).ok).toBe(false);
+    await refundRateLimit(k);
+    await refundRateLimit(k);
+    expect((await rateLimit(k, 3, 60_000)).ok).toBe(true);
+  });
+
   it('email change: needs a change_email grant (a delete grant is refused), code goes to the NEW address, old verified address is told', async () => {
     clock = new Date();
     const oldEmail = addr('old');

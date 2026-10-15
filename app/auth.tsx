@@ -29,7 +29,7 @@ import { auth, save } from '@/services/auth';
 import { emailVerify } from '@/services/emailVerify';
 import { useColors, useThemeStore } from '@/store/useThemeStore';
 import { ApiError } from '@/utils/deleteFlow';
-import { SEND_FAILED_COPY, resumablePending, type SignupStarted } from '@/utils/emailVerifyFlow';
+import { SEND_FAILED_COPY, localDigits, resumablePending, type SignupStarted } from '@/utils/emailVerifyFlow';
 import { customerProfileReady, useSessionStore } from '@/store/useSessionStore';
 import { fontFamily } from '@/constants/fonts';
 import { lightColors, radii, spacing } from '@/constants/theme';
@@ -79,6 +79,11 @@ export default function Auth() {
   const [busy, setBusy] = useState(false);
   const [pending, setPending] = useState<SignupStarted | null>(null);
   const [verifiedEmail, setVerifiedEmail] = useState('');
+  // F1: the verified session is held (not saved) while 07 shows, so SessionGate doesn't
+  // redirect to /complete-profile before the user sees "Email verified".
+  const [heldSession, setHeldSession] = useState<Parameters<typeof save>[0] | null>(null);
+  const [overlay, setOverlay] = useState(false);
+  const overlayDone = useCallback(() => setOverlay(false), []);
   const dark = useThemeStore((state) => state.dark);
   const themed = useColors();
   const reduceMotion = useReducedMotion();
@@ -165,10 +170,17 @@ export default function Auth() {
   async function verifySignup(code: string) {
     if (!pending) return;
     const session = await emailVerify.verifySignup(pending.pendingId, code);
-    save(session as Parameters<typeof save>[0]);
     await clearSavedPending();
+    setHeldSession(session as Parameters<typeof save>[0]);
     setVerifiedEmail(String(session.user.email || email.trim().toLowerCase()));
+    setOverlay(true);
     setMode('verified');
+  }
+
+  function continueVerified() {
+    if (heldSession) save(heldSession); // SessionGate takes over from here
+    setHeldSession(null);
+    afterAuth();
   }
 
   function afterAuth() {
@@ -260,9 +272,10 @@ export default function Auth() {
   }
 
   return (
-    <View style={[styles.root, dark && { backgroundColor: themed.canvas }]}>
+    <View style={[styles.root, (dark || mode !== 'phone') && { backgroundColor: themed.canvas }]}>
       <StatusBar style={dark ? 'light' : 'dark'} />
-      <View style={styles.glow} pointerEvents="none" />
+      {/* V4: white root + glow on 01 only; 02–07 use canvas. */}
+      {mode === 'phone' ? <View style={styles.glow} pointerEvents="none" /> : null}
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
           keyboardShouldPersistTaps="handled"
@@ -270,7 +283,7 @@ export default function Auth() {
           bounces={false}
         >
           {mode === 'phone' ? (
-            <View style={[styles.brandRow, { paddingTop: insets.top + 12 }]}>
+            <View style={[styles.brandRow, { paddingTop: Math.max(insets.top, 38) + 12 }]}>
               <View style={styles.brandLeft}>
                 <View style={styles.logoBadge}>
                   <CutlyLogo width={56} rounded={0} markOnly />
@@ -406,30 +419,27 @@ export default function Auth() {
                   />
                 </View>
                 <PasswordInput value={password} onChange={setPassword} show={showPw} toggle={() => setShowPw((v) => !v)} onEdit={() => setError('')} />
-                <View style={styles.phoneRow}>
-                  <View style={styles.cc}>
-                    <Text style={styles.flag}>🇮🇳</Text>
-                    <Text style={styles.ccText}>+91</Text>
-                  </View>
-                  <View style={styles.phoneDivider} />
+                {/* V5: plain phone field on 02 (India only). */}
+                <View style={styles.field}>
                   <TextInput
-                    style={styles.phoneInput}
+                    style={styles.input}
                     value={localPhone}
                     onChangeText={(v) => {
-                      setLocalPhone(digitsOnly(v).slice(0, 10));
+                      setLocalPhone(localDigits(v));
                       setError('');
                     }}
-                    placeholder="Enter your mobile number"
+                    placeholder="+91 98765 43210"
                     placeholderTextColor={muted}
                     keyboardType="phone-pad"
-                    maxLength={10}
+                    autoComplete="tel"
+                    accessibilityLabel="Mobile number"
                   />
                 </View>
                 {error ? <Text style={styles.error} accessibilityLiveRegion="polite">{error}</Text> : null}
                 <PressScale style={[styles.cta, busy && styles.ctaDisabled]} onPress={() => void startSignup()} disabled={busy} haptic>
                   <Text style={styles.ctaText}>{busy ? 'Sending…' : 'Send code'}</Text>
                 </PressScale>
-                <Legal />
+                <Legal underline={false} />
               </>
             ) : mode === 'signupCode' && pending ? (
               <EmailCodeStep
@@ -456,10 +466,11 @@ export default function Auth() {
               />
             ) : mode === 'verified' ? (
               <>
-                <SuccessOverlay visible label="Email verified" onDone={() => undefined} />
+                {/* F1/F2: the overlay closes itself, then 07's Continue is reachable. */}
+                <SuccessOverlay visible={overlay} label="Email verified" onDone={overlayDone} />
                 <Text style={[styles.title, { marginTop: 160 }]} accessibilityRole="header">Email verified</Text>
                 <Text style={styles.lead}>{verifiedEmail} is confirmed. Let's finish your profile.</Text>
-                <PressScale style={styles.cta} onPress={afterAuth} haptic>
+                <PressScale style={styles.cta} onPress={continueVerified} haptic>
                   <Text style={styles.ctaText}>Continue</Text>
                 </PressScale>
               </>
@@ -469,8 +480,10 @@ export default function Auth() {
                 <Text style={styles.sub}>
                   Book top salons, wellness centres, tattoo studios, piercing experts and more, all in one place.
                 </Text>
+                {/* V2: fixed 112×80 box so web (dotlottie canvas ignores style) matches native. */}
                 <View style={styles.catWrap} pointerEvents="none" accessible={false} importantForAccessibility="no-hide-descendants">
                   <LottieView
+                    webStyle={{ width: 112, height: 80 }}
                     ref={catRef}
                     source={SIGNIN_CAT}
                     autoPlay={!reduceMotion && focused}
@@ -529,15 +542,17 @@ export default function Auth() {
   );
 }
 
-function Legal() {
+function Legal({ underline = true }: { underline?: boolean }) {
+  // V6: underlined on 01, plain on 02 (design).
+  const linkStyle = underline ? styles.legalLink : undefined;
   return (
     <Text style={styles.legal}>
       By continuing you agree to our{' '}
-      <Text style={styles.legalLink} accessibilityRole="link" onPress={() => router.push('/legal/terms')}>
+      <Text style={linkStyle} accessibilityRole="link" onPress={() => router.push('/legal/terms')}>
         Terms of Service
       </Text>{' '}
       and{' '}
-      <Text style={styles.legalLink} accessibilityRole="link" onPress={() => router.push('/legal/privacy')}>
+      <Text style={linkStyle} accessibilityRole="link" onPress={() => router.push('/legal/privacy')}>
         Privacy Policy
       </Text>
     </Text>
@@ -615,7 +630,7 @@ const styles = StyleSheet.create({
   tileShort: { height: 64 },
   headline: { fontFamily: fontFamily.bold, fontSize: 34, lineHeight: 38, letterSpacing: -0.6, color: ink, marginTop: 8 },
   sub: { fontFamily: fontFamily.regular, fontSize: 14, lineHeight: 20, color: muted, marginTop: -8 },
-  catWrap: { alignSelf: 'flex-end', marginRight: 20, zIndex: 1, marginTop: -8, marginBottom: -16 },
+  catWrap: { alignSelf: 'flex-end', width: 112, height: 80, overflow: 'hidden', marginRight: 20, zIndex: 1, marginTop: -8, marginBottom: -16 },
   form: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.md },
   backRow: { flexDirection: 'row', alignItems: 'center', gap: 2, alignSelf: 'flex-start', marginLeft: -4, minHeight: 44 },
   backText: { fontFamily: fontFamily.medium, fontSize: 14, color: ink },

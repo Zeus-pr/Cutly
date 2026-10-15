@@ -5,7 +5,12 @@ import {
   RESTART_COPY,
   SEND_FAILED_COPY,
   codeOutcome,
+  displayMasked,
+  displayPhone,
+  localDigits,
   nudgeVisible,
+  rateLimitOver,
+  showExpiryCaption,
   resendCaption,
   resumablePending,
   showResendHint,
@@ -56,5 +61,27 @@ describe('T4 small UI rules', () => {
     expect(resumablePending(raw, 30 * 60_000)).toBeNull();
     expect(resumablePending('nope', 0)).toBeNull();
     expect(resumablePending(null, 0)).toBeNull();
+  });
+});
+
+describe('T4 round 3 UI helpers (tester F3, V9, V10, V12, V15, V18, V5)', () => {
+  it('F3: a fresh rate limit is not cleared on the render that sets it', () => {
+    const now = 1_000_000;
+    expect(rateLimitOver(now + 45_000, now)).toBe(false);
+    expect(rateLimitOver(now - 1, now)).toBe(true);
+    expect(rateLimitOver(null, now)).toBe(false);
+  });
+  it('V9/V12: expiry caption only on plain 03', () => {
+    expect(showExpiryCaption({ error: '', expired: false, resendLeft: 42 })).toBe(true);
+    expect(showExpiryCaption({ error: "That code isn't right. 4 tries left.", expired: false, resendLeft: 42 })).toBe(false);
+    expect(showExpiryCaption({ error: '', expired: true, resendLeft: 0 })).toBe(false);
+    expect(showExpiryCaption({ error: '', expired: false, resendLeft: 0 })).toBe(false);
+  });
+  it('V10 bullets, V15/V18 phone format, V5 phone parsing', () => {
+    expect(displayMasked('r***@gmail.com')).toBe('r•••@gmail.com');
+    expect(displayPhone('+919876543210')).toBe('+91 98765 43210');
+    expect(displayPhone('+14155550100')).toBe('+14155550100');
+    expect(localDigits('+91 98765 43210')).toBe('9876543210');
+    expect(localDigits('98765 43210')).toBe('9876543210');
   });
 });

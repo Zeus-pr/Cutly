@@ -10,10 +10,11 @@ import {
   isRetryableTxError,
   maskEmail,
   signupEmailVerifyOn,
-  emailConfigProblems
+  emailConfigProblems,
+  emailConfigWarnings
 } from '../backend/src/emailCode';
 import { canStillSignIn, googleUnverifiedOwnerMessage } from '../backend/src/emailRelease';
-import { codeMail, emailChangedMail, signupNoticeMail, DEFAULT_EMAIL_FROM } from '../backend/src/mail';
+import { codeMail, emailChangedMail, sendTransactional, signupNoticeMail, DEFAULT_EMAIL_FROM } from '../backend/src/mail';
 import { suppressionFor, verifySvixSignature } from '../backend/src/resendWebhook';
 
 const KEY = 'k'.repeat(32);
@@ -154,5 +155,25 @@ describe('GOOGLE_EMAIL_UNVERIFIED_OWNER copy (PR Review #58 re-review)', () => {
     for (const m of [on, off]) expect(m).toMatch(/phone number or password, then verify the email or link Google from Profile/);
     expect(on).toMatch(/Create an account with this email and enter the code we send to free it/);
     expect(off).not.toMatch(/Create an account/);
+  });
+});
+
+describe('Resend key split (T4 vs partner form)', () => {
+  it('T4 mail never uses RESEND_API_KEY', async () => {
+    const saved = { ...process.env };
+    process.env.EMAIL_TRANSPORT = 'resend';
+    process.env.RESEND_API_KEY = 're_partner_form_only';
+    delete process.env.RESEND_VERIFY_API_KEY;
+    try {
+      const r = await sendTransactional(codeMail('a@example.com', '123456', 'signup_verify'));
+      expect(r).toEqual({ sent: false, reason: 'RESEND_VERIFY_API_KEY unset' });
+    } finally {
+      process.env = saved;
+    }
+  });
+  it('warns at startup when the verify key is missing', () => {
+    expect(emailConfigWarnings({ RESEND_API_KEY: 'x' })).toHaveLength(1);
+    expect(emailConfigWarnings({ RESEND_VERIFY_API_KEY: 'x' })).toEqual([]);
+    expect(emailConfigWarnings({ EMAIL_TRANSPORT: 'log' })).toEqual([]);
   });
 });

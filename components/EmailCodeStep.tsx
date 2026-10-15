@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated, Text, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { AccessibilityInfo, Text, View } from 'react-native';
 import { CodeSlots } from '@/components/CodeSlots';
 import { PressScale } from '@/components/PressScale';
 import { BackRow, CountdownRing, Cta, ErrorLine, Title, deleteStyles, useCountdown } from '@/components/accountDeletion/DeleteParts';
 import { useThemedStyles } from '@/store/useThemeStore';
+import { showToast } from '@/store/useToastStore';
 import {
   RESEND_HINT,
   codeOutcome,
   resendCaption,
+  displayMasked,
+  rateLimitOver,
+  showExpiryCaption,
   showResendHint,
   type CodeOutcome
 } from '@/utils/emailVerifyFlow';
@@ -42,8 +46,6 @@ export function EmailCodeStep({
   const [resends, setResends] = useState(0);
   const [resendAt, setResendAt] = useState(() => Date.now() + resendInSec * 1000);
   const [limitedUntil, setLimitedUntil] = useState<number | null>(null);
-  const [toast, setToast] = useState(false);
-  const toastFade = useRef(new Animated.Value(0)).current;
   const resendLeft = useCountdown(resendAt);
   const limitLeft = useCountdown(limitedUntil);
   const [limitTotal, setLimitTotal] = useState(60);
@@ -52,8 +54,9 @@ export function EmailCodeStep({
     if (resendLeft === 0) AccessibilityInfo.announceForAccessibility('You can resend the code now.');
   }, [resendLeft === 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // F3: clear only once the deadline has passed (limitLeft is still 0 on the render that sets it).
   useEffect(() => {
-    if (limitedUntil && limitLeft === 0) setLimitedUntil(null);
+    if (limitLeft === 0 && rateLimitOver(limitedUntil)) setLimitedUntil(null);
   }, [limitLeft, limitedUntil]);
 
   function handle(outcome: CodeOutcome) {
@@ -102,10 +105,7 @@ export function EmailCodeStep({
       setCode('');
       setResends((n) => n + 1);
       setResendAt(Date.now() + (sent.resendInSec || 60) * 1000);
-      setToast(true);
-      AccessibilityInfo.announceForAccessibility('New code sent');
-      toastFade.setValue(1);
-      Animated.timing(toastFade, { toValue: 0, duration: 400, delay: 2200, useNativeDriver: true }).start(() => setToast(false));
+      showToast('New code sent', 'mail-outline'); // V11: shared bottom ink pill (announced)
     } catch (err) {
       handle(codeOutcome(err));
     } finally {
@@ -128,7 +128,7 @@ export function EmailCodeStep({
     <>
       <BackRow onPress={onBack} label={backLabel} />
       <Title>Check your email</Title>
-      <Text style={s.lead}>Enter the 6-digit code sent to {maskedEmail}</Text>
+      <Text style={s.lead}>Enter the 6-digit code sent to {displayMasked(maskedEmail)}</Text>
       <View style={expired ? { opacity: 0.55 } : undefined}>
         <CodeSlots
           value={code}
@@ -139,14 +139,11 @@ export function EmailCodeStep({
           onComplete={(value) => void submit(value)}
           disabled={busy || expired}
           accessibilityLabel="6-digit code"
+          tone="email"
+          error={Boolean(error) && !expired}
         />
       </View>
       <ErrorLine text={error} />
-      {toast ? (
-        <Animated.View style={{ opacity: toastFade, alignSelf: 'center', backgroundColor: '#17263C', borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 }}>
-          <Text style={{ color: '#FFF', fontSize: 13 }}>New code sent</Text>
-        </Animated.View>
-      ) : null}
       {expired ? (
         <Cta label={busy ? 'Sending…' : 'Send a new code'} onPress={() => void sendAgain()} disabled={busy} />
       ) : (
@@ -163,7 +160,9 @@ export function EmailCodeStep({
           </PressScale>
         )
       ) : null}
-      <Text style={s.hint}>The code expires in 10 minutes. Check spam if you don't see it.</Text>
+      {showExpiryCaption({ error, expired, resendLeft }) ? (
+        <Text style={s.hint}>The code expires in 10 minutes. Check spam if you don't see it.</Text>
+      ) : null}
       {showResendHint(resends) ? <Text style={s.hint}>{RESEND_HINT}</Text> : null}
     </>
   );

@@ -97,7 +97,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead
 } from './notifications';
-import { clientKey, rateLimit, sendRateLimited } from './rateLimit';
+import { refundRateLimit, clientKey, rateLimit, sendRateLimited } from './rateLimit';
 import { clientErrorBody, toClientError } from './httpError';
 import { getClientIp, isLoopback, socketIp } from './clientIp';
 import {
@@ -210,8 +210,9 @@ app.post('/api/auth/signup', async (req, res) => {
   if (!signupEmailVerifyOn()) {
     return handle(res, () => signUp(parsed.data.email, parsed.data.password, parsed.data.phone, parsed.data.name));
   }
-  if (!(await emailSendLimited(req, res, parsed.data.email, null))) return;
-  return handleEmail(res, () => startEmailSignup(parsed.data), 202);
+  const sendKeys = await emailSendLimited(req, res, parsed.data.email, null);
+  if (!sendKeys) return;
+  return handleEmail(res, () => startEmailSignup(parsed.data), 202, sendKeys);
 });
 
 /**
@@ -219,21 +220,29 @@ app.post('/api/auth/signup', async (req, res) => {
  * 5/subject (pending signup or session) per hour. The 60 s cooldown is checked in emailAuth.
  * Returns false when a 429 was already sent.
  */
-async function emailSendLimited(req: express.Request, res: express.Response, email: string | null, subject: string | null) {
+async function emailSendLimited(
+  req: express.Request,
+  res: express.Response,
+  email: string | null,
+  subject: string | null
+): Promise<string[] | false> {
   const checks: [string, number, number][] = [[clientKey(req, 'email-send'), 10, 15 * 60_000]];
   if (email) {
     const bucket = emailBucket(email.trim().toLowerCase());
     checks.push([`email-send-h:${bucket}`, 5, 60 * 60_000], [`email-send-d:${bucket}`, 20, 24 * 60 * 60_000]);
   }
   if (subject) checks.push([`email-send-s:${subject}`, 5, 60 * 60_000]);
+  const taken: string[] = [];
   for (const [key, limit, windowMs] of checks) {
     const limited = await rateLimit(key, limit, windowMs);
     if (!limited.ok) {
+      await Promise.all(taken.map(refundRateLimit)); // refused here: earlier buckets give the hit back
       sendRateLimited(res, limited, 'codes requested');
       return false;
     }
+    taken.push(key);
   }
-  return true;
+  return taken;
 }
 
 /** Verify limits: 20/IP per 15 min (as otp-verify) + 10/address-subject per hour; 5 per code in emailAuth. */
@@ -252,10 +261,12 @@ async function emailVerifyLimited(req: express.Request, res: express.Response, s
 }
 
 /** Like handle(), plus Retry-After on a RATE_LIMITED domain error and a custom success status. */
-async function handleEmail(res: express.Response, action: () => Promise<unknown>, okStatus = 200) {
+async function handleEmail(res: express.Response, action: () => Promise<unknown>, okStatus = 200, refund: string[] = []) {
   try {
     res.status(okStatus).json({ data: await action() });
   } catch (error) {
+    // T4 F4: only codes actually sent count toward the send limits (cooldown / re-auth / taken refusals don't).
+    await Promise.all(refund.map(refundRateLimit));
     const err = toClientError(error);
     const retry = err.details?.retryAfterSec;
     if (err.code === 'RATE_LIMITED' && typeof retry === 'number') res.setHeader('Retry-After', String(retry));
@@ -289,8 +300,9 @@ app.post('/api/auth/signup/resend', async (req, res) => {
   const parsed = z.object({ pendingId: z.string().min(10).max(40) }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Start again from Create account.' });
   const email = await pendingSignupEmail(parsed.data.pendingId);
-  if (!(await emailSendLimited(req, res, email, `pending:${parsed.data.pendingId}`))) return;
-  return handleEmail(res, () => resendEmailSignup(parsed.data.pendingId));
+  const sendKeys = await emailSendLimited(req, res, email, `pending:${parsed.data.pendingId}`);
+  if (!sendKeys) return;
+  return handleEmail(res, () => resendEmailSignup(parsed.data.pendingId), 200, sendKeys);
 });
 app.post('/api/auth/signup/verify', async (req, res) => {
   const parsed = z.object({ pendingId: z.string().min(10).max(40), code: codeSchema }).safeParse(req.body);
@@ -303,8 +315,9 @@ app.post('/api/auth/email/verify/send', async (req, res) => {
   const me = await emailUser(req, res);
   if (!me) return;
   // Sec #58 item 2: per-address buckets here too.
-  if (!(await emailSendLimited(req, res, me.email, `user:${me.userId}`))) return;
-  return handleEmail(res, () => sendVerifyExisting(me.token));
+  const sendKeys = await emailSendLimited(req, res, me.email, `user:${me.userId}`);
+  if (!sendKeys) return;
+  return handleEmail(res, () => sendVerifyExisting(me.token), 200, sendKeys);
 });
 app.post('/api/auth/email/verify', async (req, res) => {
   const parsed = z.object({ code: codeSchema }).safeParse(req.body);
@@ -319,15 +332,17 @@ app.post('/api/auth/email/change', async (req, res) => {
   if (!me) return;
   const parsed = z.object({ newEmail: emailSchema }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email.' });
-  if (!(await emailSendLimited(req, res, parsed.data.newEmail, `user:${me.userId}`))) return;
-  return handleEmail(res, () => requestEmailChange(me.token, req.header('x-reauth-token'), parsed.data.newEmail));
+  const sendKeys = await emailSendLimited(req, res, parsed.data.newEmail, `user:${me.userId}`);
+  if (!sendKeys) return;
+  return handleEmail(res, () => requestEmailChange(me.token, req.header('x-reauth-token'), parsed.data.newEmail), 200, sendKeys);
 });
 app.post('/api/auth/email/change/resend', async (req, res) => {
   const me = await emailUser(req, res);
   if (!me) return;
   // Sec #58 item 2: per-address buckets on the pending target address.
-  if (!(await emailSendLimited(req, res, await pendingChangeEmail(me.userId), `user:${me.userId}`))) return;
-  return handleEmail(res, () => resendEmailChange(me.token));
+  const sendKeys = await emailSendLimited(req, res, await pendingChangeEmail(me.userId), `user:${me.userId}`);
+  if (!sendKeys) return;
+  return handleEmail(res, () => resendEmailChange(me.token), 200, sendKeys);
 });
 app.post('/api/auth/email/change/verify', async (req, res) => {
   const me = await emailUser(req, res);

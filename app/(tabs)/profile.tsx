@@ -1,3 +1,4 @@
+import { displayPhone } from '@/utils/emailVerifyFlow';
 import { useEffect, useState, type ComponentProps } from 'react';
 import {
   Linking,
@@ -64,7 +65,6 @@ export default function Profile() {
   const [snoozedUntil, setSnoozedUntil] = useState<number | null>(null);
   const [releasedDismissed, setReleasedDismissed] = useState(false);
   const display = name?.trim() || 'Add your name';
-  const contact = phone || email || '';
   const version = Constants.expoConfig?.version || '1.0.0';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name || '');
@@ -222,15 +222,20 @@ export default function Profile() {
           <View style={styles.profileTop}>
             <View style={styles.profileCopy}>
               <Text style={styles.name}>{display.toUpperCase()}</Text>
-              {contact ? <Text style={styles.phone}>{contact}</Text> : null}
-              {phone && email ? <Text style={styles.phone}>{email}</Text> : null}
-              {!email && emailReleased ? <Text style={styles.phone}>No email added</Text> : null}
-              {email && !emailVerified ? (
-                <View style={styles.pill} accessibilityLabel="Email not verified">
-                  <Ionicons name="alert-circle-outline" size={12} color={colors.danger} />
-                  <Text style={styles.pillText}>Not verified</Text>
+              {phone ? <Text style={styles.phone}>{displayPhone(phone)}</Text> : null}
+              {email ? (
+                // V13: "Not verified" pill inline with the email.
+                <View style={styles.emailLine}>
+                  <Text style={[styles.phone, styles.emailText]} numberOfLines={1}>{email}</Text>
+                  {!emailVerified ? (
+                    <View style={styles.pill} accessibilityLabel="Email not verified">
+                      <Ionicons name="alert-circle-outline" size={12} color={colors.danger} />
+                      <Text style={styles.pillText}>Not verified</Text>
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
+              {!email && emailReleased ? <Text style={styles.phone}>No email added</Text> : null}
               {genderLabelOf(gender) ? <Text style={styles.phone}>{genderLabelOf(gender)}</Text> : null}
               {!phone ? <Text style={styles.warn}>Add a phone number to book</Text> : null}
             </View>
@@ -455,6 +460,8 @@ function profileStyles(colors: Palette) {
       gap: spacing.sm
     },
     profileCopy: { flex: 1, gap: 4 },
+    emailLine: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'nowrap' },
+    emailText: { flexShrink: 1 },
     name: { fontFamily: fontFamily.bold, fontSize: 18, color: colors.ink, letterSpacing: 0.4 },
     phone: { fontFamily: fontFamily.regular, fontSize: 14, color: colors.muted },
     warn: { fontFamily: fontFamily.medium, fontSize: 13, color: colors.accentDark },

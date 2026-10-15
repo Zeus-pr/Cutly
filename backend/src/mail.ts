@@ -86,10 +86,11 @@ export const sendTransactional: EmailSender = async (mail) => {
     console.log(`[mail:log] ${mail.tag} to ${maskTo(mail.to)}${dev ? ` · ${mail.text.split('\n')[0]}` : ''}`);
     return { sent: true };
   }
-  const apiKey = process.env.RESEND_API_KEY?.trim();
+  // T4 mail uses its own key. RESEND_API_KEY belongs to the partner contact form (sendPartnerLeadEmail).
+  const apiKey = process.env.RESEND_VERIFY_API_KEY?.trim();
   if (!apiKey) {
-    console.error('[mail] RESEND_API_KEY unset; transactional mail not sent', mail.tag);
-    return { sent: false, reason: 'RESEND_API_KEY unset' };
+    console.error('[mail] RESEND_VERIFY_API_KEY unset; transactional mail not sent', mail.tag);
+    return { sent: false, reason: 'RESEND_VERIFY_API_KEY unset' };
   }
   try {
     const res = await fetch('https://api.resend.com/emails', {

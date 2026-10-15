@@ -10,7 +10,7 @@ import { startAwaitingExpirySweep } from './awaitingExpiry';
 import { startAccountPurgeSweep } from './accountPurge';
 import { startEmailCleanupSweep } from './emailCleanup';
 import { phoneHashKey } from './accountDeletion';
-import { emailConfigProblems } from './emailCode';
+import { emailConfigProblems, emailConfigWarnings } from './emailCode';
 import { resolveListenConfig } from './listenConfig';
 
 function fail(message: string, error?: unknown): never {
@@ -29,6 +29,7 @@ try {
 {
   const problems = emailConfigProblems();
   if (problems.length) fail(problems.join('; '));
+  for (const warning of emailConfigWarnings()) console.warn(`[startup] ${warning}`);
 }
 
 let cfg: ReturnType<typeof resolveListenConfig>;

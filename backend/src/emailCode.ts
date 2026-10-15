@@ -111,6 +111,15 @@ export function emailConfigProblems(env: Env = process.env): string[] {
   return problems;
 }
 
+/** Startup warnings (logged, not fatal): T4 sends fail closed with 503 EMAIL_UNAVAILABLE. */
+export function emailConfigWarnings(env: Env = process.env): string[] {
+  const transport = (env.EMAIL_TRANSPORT || 'resend').trim().toLowerCase();
+  if (transport === 'resend' && !env.RESEND_VERIFY_API_KEY?.trim()) {
+    return ['RESEND_VERIFY_API_KEY is not set: email codes will fail with 503 (RESEND_API_KEY is only for the partner form)'];
+  }
+  return [];
+}
+
 /** Postgres deadlock / serialization failure → worth one retry (DBA item 4). */
 export function isRetryableTxError(error: unknown) {
   const e = error as { code?: string; message?: string; meta?: { code?: string } };

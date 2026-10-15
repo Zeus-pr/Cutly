@@ -94,6 +94,29 @@ export async function rateLimit(key: string, limit: number, windowMs: number): P
 }
 
 /**
+ * T4 F4: give back one hit (the request was refused later, so nothing was sent).
+ * Never goes below zero; a missing/expired bucket is left alone.
+ */
+export async function refundRateLimit(key: string): Promise<void> {
+  const client = redisClient();
+  if (client) {
+    try {
+      if (client.status === 'wait') await client.connect();
+      await client.eval(
+        `local v = tonumber(redis.call('GET', KEYS[1]) or '0') if v > 0 then redis.call('DECR', KEYS[1]) end return 0`,
+        1,
+        `cutly:rl:${key}`
+      );
+      return;
+    } catch {
+      // fall through to memory
+    }
+  }
+  const existing = buckets.get(key);
+  if (existing && existing.resetAt > Date.now() && existing.count > 0) existing.count -= 1;
+}
+
+/**
  * T2: bucket by getClientIp (CF-Connecting-IP only from a trusted proxy socket, else the
  * socket peer). IPv6 is bucketed by /64. Never reads X-Forwarded-For.
  */

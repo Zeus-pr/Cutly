@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, KeyboardAvoidingView, Platform, ScrollView, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { CodeSlots } from '@/components/CodeSlots';
+import { PressScale } from '@/components/PressScale';
 import { EmailCodeStep } from '@/components/EmailCodeStep';
 import { SuccessOverlay } from '@/components/SuccessOverlay';
 import {
@@ -20,11 +21,11 @@ import {
 } from '@/components/accountDeletion/DeleteParts';
 import { refreshProfile } from '@/services/auth';
 import { emailVerify } from '@/services/emailVerify';
-import { appAlert } from '@/store/useDialogStore';
+import { showToast } from '@/store/useToastStore';
 import { useSessionStore } from '@/store/useSessionStore';
 import { useColors, useThemedStyles } from '@/store/useThemeStore';
 import { localPhone, pickReauthMethod, reauthOutcome, type ReauthMethod } from '@/utils/deleteFlow';
-import { TAKEN_COPY, codeOutcome, type CodeSent } from '@/utils/emailVerifyFlow';
+import { TAKEN_COPY, codeOutcome, displayPhone, type CodeSent } from '@/utils/emailVerifyFlow';
 
 type Step = 'reauth' | 'rate' | 'new' | 'code' | 'done' | 'verify';
 
@@ -59,6 +60,9 @@ export default function EmailScreen() {
   const grantRef = useRef<string | null>(null);
   const smsSent = useRef(false);
   const left = useCountdown(retryAt);
+  // F2: the success overlay closes itself so Done is reachable.
+  const [overlay, setOverlay] = useState(false);
+  const overlayDone = useCallback(() => setOverlay(false), []);
 
   useEffect(() => {
     void refreshProfile();
@@ -172,14 +176,15 @@ export default function EmailScreen() {
     if (verifyMode) {
       const r = await emailVerify.confirmVerify(value);
       useSessionStore.getState().setProfile(r.user as never);
-      AccessibilityInfo.announceForAccessibility('Email verified');
-      appAlert('Email verified', `${String(r.user.email || email || '')} is confirmed.`);
+      // V14: toast (not a dialog), then back to Profile.
+      showToast('Email verified', 'checkmark-circle-outline');
       back();
       return;
     }
     const r = await emailVerify.confirmChange(value);
     useSessionStore.getState().setProfile({ ...(r.user as object), emailReleased: false } as never);
     setDone({ email: String(r.user.email || newEmail.trim().toLowerCase()), notified: r.notifiedOldAddress });
+    setOverlay(true);
     setStep('done');
   }
 
@@ -209,10 +214,30 @@ export default function EmailScreen() {
         <Title>Confirm it’s you</Title>
         {method === 'otp' ? (
           <>
-            <Text style={s.lead}>Enter the code we sent to {localPhone(phone)}.</Text>
-            <CodeSlots value={code} onChange={setCode} onComplete={(v) => void reauth({ code: v })} disabled={busy} accessibilityLabel="6-digit code" />
+            {/* V15: design copy + Resend link. */}
+            <Text style={s.lead}>Enter the code sent to {displayPhone(phone)}</Text>
+            <CodeSlots value={code} onChange={setCode} onComplete={(v) => void reauth({ code: v })} disabled={busy} accessibilityLabel="6-digit code" tone="email" error={Boolean(error)} />
             <ErrorLine text={error} />
             <Cta label={busy ? 'Checking…' : 'Continue'} onPress={() => void reauth({ code })} disabled={busy || code.length < 6} />
+            <PressScale
+              style={s.textBtn}
+              onPress={() => {
+                smsSent.current = false;
+                setError('');
+                setCode('');
+                emailVerify.sendReauthSms().then(() => showToast('New code sent', 'chatbubble-outline')).catch((err) => {
+                  const out = reauthOutcome(err);
+                  if (out.kind === 'rateLimited') rate(out.retryAt);
+                  else if (out.kind === 'signedOut') signedOut();
+                  else setError(out.message);
+                });
+              }}
+              disabled={busy}
+              haptic
+              accessibilityRole="button"
+            >
+              <Text style={s.link}>Resend code</Text>
+            </PressScale>
           </>
         ) : method === 'password' ? (
           <>
@@ -235,9 +260,6 @@ export default function EmailScreen() {
             <Secondary label="Continue with Google" icon="logo-google" onPress={() => void google()} disabled={busy} />
           </>
         ) : null}
-        {method !== 'password' && hasPassword ? (
-          <Secondary label="Use password instead" icon="key-outline" onPress={() => { setMethod('password'); setError(''); }} />
-        ) : null}
       </>
     );
   } else if (step === 'new') {
@@ -250,7 +272,7 @@ export default function EmailScreen() {
         </Text>
         <View style={s.field}>
           <TextInput
-            style={s.input}
+            style={[s.input, { backgroundColor: '#FAFAFA', paddingRight: 16 }]}
             value={newEmail}
             onChangeText={(v) => {
               setNewEmail(v);
@@ -296,7 +318,7 @@ export default function EmailScreen() {
   } else if (step === 'done' && done) {
     body = (
       <>
-        <SuccessOverlay visible label="Email updated" onDone={() => undefined} />
+        <SuccessOverlay visible={overlay} label="Email updated" onDone={overlayDone} />
         <Title>Email updated</Title>
         <Text style={s.lead}>
           You'll now sign in with {done.email}.{done.notified ? " We've let your old address know." : ''}

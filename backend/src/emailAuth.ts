@@ -282,11 +282,15 @@ export async function requestEmailChange(token: string, reauthToken: string | un
   if (current.email && normalEmail(current.email) === emailNorm) {
     throw new AppError('That is already your email.', 400, 'SAME_EMAIL');
   }
-  const holders = (await findUsersByEmail(emailNorm)).filter((row) => row.id !== current.id);
-  if (holders.some((row) => row.emailVerified || deletionState(row, deps.now()) !== 'active')) throw EMAIL_TAKEN();
   emailCodeKey();
   // P3: the step-up grant (action change_email) is burnt here; resends don't need a new one.
-  await prisma.$transaction((tx) => consumeReauthToken(tx, jwtSecret(), reauthToken, current.id, 'customer', deps.now(), CHANGE_EMAIL_ACTION));
+  // Security #58: the grant is checked BEFORE the taken check, so without re-auth nobody learns
+  // whether an address is on a verified account. A taken address rolls the grant back (still usable).
+  await prisma.$transaction(async (tx) => {
+    await consumeReauthToken(tx, jwtSecret(), reauthToken, current.id, 'customer', deps.now(), CHANGE_EMAIL_ACTION);
+    const holders = (await tx.user.findMany({ where: { email: emailNorm } })).filter((row) => row.id !== current.id);
+    if (holders.some((row) => row.emailVerified || deletionState(row, deps.now()) !== 'active')) throw EMAIL_TAKEN();
+  });
   return issueCode({ userId: current.id }, 'email_change', emailNorm, deps);
 }
 
