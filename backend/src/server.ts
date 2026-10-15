@@ -106,6 +106,7 @@ import {
   confirmVerifyExisting,
   emailReleasedFlag,
   pendingSignupEmail,
+  pendingChangeEmail,
   requestEmailChange,
   resendEmailChange,
   resendEmailSignup,
@@ -262,6 +263,26 @@ async function handleEmail(res: express.Response, action: () => Promise<unknown>
   }
 }
 
+/**
+ * Signed-in email routes: limits key on the user id (PR Review #58), not on token bytes.
+ * Returns null after answering 401.
+ */
+async function emailUser(req: express.Request, res: express.Response) {
+  const token = bearer(req);
+  if (!token) {
+    res.status(401).json({ error: 'Sign in again.' });
+    return null;
+  }
+  try {
+    const user = await userFromToken(token);
+    return { token, userId: user.id, email: user.email };
+  } catch (error) {
+    const err = toClientError(error);
+    res.status(err.status).json(clientErrorBody(err));
+    return null;
+  }
+}
+
 const codeSchema = z.string().transform((v) => cleanCode(v)).refine((v): v is string => Boolean(v));
 
 app.post('/api/auth/signup/resend', async (req, res) => {
@@ -274,45 +295,47 @@ app.post('/api/auth/signup/resend', async (req, res) => {
 app.post('/api/auth/signup/verify', async (req, res) => {
   const parsed = z.object({ pendingId: z.string().min(10).max(40), code: codeSchema }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter the 6-digit code.' });
-  const email = await pendingSignupEmail(parsed.data.pendingId);
-  if (!(await emailVerifyLimited(req, res, email ? emailBucket(email) : `pending:${parsed.data.pendingId}`))) return;
+  // PR Review #58: per pending signup + IP (one IP can't burn another person's attempts budget).
+  if (!(await emailVerifyLimited(req, res, `pending:${parsed.data.pendingId}:${clientKey(req, 'ip')}`))) return;
   return handleEmail(res, () => verifyEmailSignup(parsed.data.pendingId, parsed.data.code));
 });
 app.post('/api/auth/email/verify/send', async (req, res) => {
-  const token = bearer(req);
-  if (!token) return res.status(401).json({ error: 'Sign in again.' });
-  if (!(await emailSendLimited(req, res, null, `tok:${token.slice(-24)}`))) return;
-  return handleEmail(res, () => sendVerifyExisting(token));
+  const me = await emailUser(req, res);
+  if (!me) return;
+  // Sec #58 item 2: per-address buckets here too.
+  if (!(await emailSendLimited(req, res, me.email, `user:${me.userId}`))) return;
+  return handleEmail(res, () => sendVerifyExisting(me.token));
 });
 app.post('/api/auth/email/verify', async (req, res) => {
-  const token = bearer(req);
-  if (!token) return res.status(401).json({ error: 'Sign in again.' });
   const parsed = z.object({ code: codeSchema }).safeParse(req.body);
+  const me = await emailUser(req, res);
+  if (!me) return;
   if (!parsed.success) return res.status(400).json({ error: 'Enter the 6-digit code.' });
-  if (!(await emailVerifyLimited(req, res, `tok:${token.slice(-24)}`))) return;
-  return handleEmail(res, () => confirmVerifyExisting(token, parsed.data.code));
+  if (!(await emailVerifyLimited(req, res, `user:${me.userId}`))) return;
+  return handleEmail(res, () => confirmVerifyExisting(me.token, parsed.data.code));
 });
 app.post('/api/auth/email/change', async (req, res) => {
-  const token = bearer(req);
-  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  const me = await emailUser(req, res);
+  if (!me) return;
   const parsed = z.object({ newEmail: emailSchema }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email.' });
-  if (!(await emailSendLimited(req, res, parsed.data.newEmail, `tok:${token.slice(-24)}`))) return;
-  return handleEmail(res, () => requestEmailChange(token, req.header('x-reauth-token'), parsed.data.newEmail));
+  if (!(await emailSendLimited(req, res, parsed.data.newEmail, `user:${me.userId}`))) return;
+  return handleEmail(res, () => requestEmailChange(me.token, req.header('x-reauth-token'), parsed.data.newEmail));
 });
 app.post('/api/auth/email/change/resend', async (req, res) => {
-  const token = bearer(req);
-  if (!token) return res.status(401).json({ error: 'Sign in again.' });
-  if (!(await emailSendLimited(req, res, null, `tok:${token.slice(-24)}`))) return;
-  return handleEmail(res, () => resendEmailChange(token));
+  const me = await emailUser(req, res);
+  if (!me) return;
+  // Sec #58 item 2: per-address buckets on the pending target address.
+  if (!(await emailSendLimited(req, res, await pendingChangeEmail(me.userId), `user:${me.userId}`))) return;
+  return handleEmail(res, () => resendEmailChange(me.token));
 });
 app.post('/api/auth/email/change/verify', async (req, res) => {
-  const token = bearer(req);
-  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  const me = await emailUser(req, res);
+  if (!me) return;
   const parsed = z.object({ code: codeSchema }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Enter the 6-digit code.' });
-  if (!(await emailVerifyLimited(req, res, `tok:${token.slice(-24)}`))) return;
-  return handleEmail(res, () => confirmEmailChange(token, parsed.data.code));
+  if (!(await emailVerifyLimited(req, res, `user:${me.userId}`))) return;
+  return handleEmail(res, () => confirmEmailChange(me.token, parsed.data.code));
 });
 app.post('/api/auth/login', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'login'), 20, 15 * 60_000);

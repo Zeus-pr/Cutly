@@ -39,6 +39,9 @@ const defaultDeps: EmailDeps = { send: sendTransactional, now: () => new Date() 
 
 /** Same message as the legacy one-step signup (SEC-08). */
 const SIGNUP_TAKEN = 'Could not create that account. Try another email or phone, or sign in.';
+/** PR Review #58 minor: the phone was taken while the code was out. */
+export const PHONE_TAKEN = () =>
+  new AppError('That phone number is already on a CutLy account. Sign in with it, or use another number.', 409, 'PHONE_TAKEN');
 
 type Subject = { userId: string } | { pendingSignupId: string };
 const subjectKey = (s: Subject) => ('userId' in s ? `user:${s.userId}` : `pending:${s.pendingSignupId}`);
@@ -98,7 +101,13 @@ async function assertCooldown(subject: Subject, purpose: EmailCodePurpose, now: 
  * exceed 5. Wrong → 401 CODE_INVALID + attemptsRemaining; 5th wrong / expired / none → 410 CODE_EXPIRED.
  * A match deletes the row (single use). Returns the target address.
  */
-export async function consumeEmailCode(subject: Subject, purpose: EmailCodePurpose, code: string, now: Date) {
+export async function consumeEmailCode(
+  subject: Subject,
+  purpose: EmailCodePurpose,
+  code: string,
+  now: Date,
+  opts: { keep?: boolean } = {}
+) {
   const key = emailCodeKey();
   const live = await prisma.emailCode.findFirst({ where: { ...subjectWhere(subject), purpose }, orderBy: { createdAt: 'desc' } });
   if (!live) throw CODE_EXPIRED();
@@ -119,6 +128,8 @@ export async function consumeEmailCode(subject: Subject, purpose: EmailCodePurpo
     }
     throw CODE_INVALID(left);
   }
+  // keep: the caller deletes the row inside its own transaction, only once that succeeds.
+  if (opts.keep) return live.emailNorm;
   const used = await prisma.emailCode.deleteMany({ where: { id: live.id } });
   if (used.count !== 1) throw CODE_EXPIRED();
   return live.emailNorm;
@@ -189,6 +200,12 @@ export async function pendingSignupEmail(pendingId: string) {
   return pending?.emailNorm ?? null;
 }
 
+/** For per-address rate limits on /email/change/resend. Null when no change is pending. */
+export async function pendingChangeEmail(userId: string) {
+  const last = await prisma.emailCode.findFirst({ where: { userId, purpose: 'email_change' }, orderBy: { createdAt: 'desc' } });
+  return last?.emailNorm ?? null;
+}
+
 export async function resendEmailSignup(pendingId: string, deps: EmailDeps = defaultDeps) {
   const now = deps.now();
   const pending = await livePending(pendingId, now);
@@ -202,7 +219,8 @@ export async function resendEmailSignup(pendingId: string, deps: EmailDeps = def
 export async function verifyEmailSignup(pendingId: string, code: string, deps: EmailDeps = defaultDeps) {
   const now = deps.now();
   const pending = await livePending(pendingId, now);
-  await consumeEmailCode({ pendingSignupId: pending.id }, 'signup_verify', code, now);
+  // The code stays valid until the account is created, so a 409 doesn't force a new code.
+  await consumeEmailCode({ pendingSignupId: pending.id }, 'signup_verify', code, now, { keep: true });
   let released: string[] = [];
   let user: User;
   try {
@@ -211,14 +229,14 @@ export async function verifyEmailSignup(pendingId: string, code: string, deps: E
         const row = await tx.pendingSignup.findUnique({ where: { id: pending.id } });
         if (!row) throw SIGNUP_EXPIRED();
         const phoneOwner = await tx.user.findUnique({ where: { phone: row.phone } });
-        if (phoneOwner) throw EMAIL_TAKEN();
+        if (phoneOwner) throw PHONE_TAKEN();
         released = await releaseUnverifiedHolders(tx, row.emailNorm, null, 'signup_verified', { keepPendingSignupId: row.id });
         const created = await tx.user.create({
           data: { email: row.emailNorm, emailVerified: true, phone: row.phone, name: row.name, passwordHash: row.passwordHash }
         });
         await setReleaseWinner(tx, released, created.id);
-        await tx.pendingSignup.delete({ where: { id: row.id } });
         await tx.emailCode.deleteMany({ where: { pendingSignupId: row.id } });
+        await tx.pendingSignup.delete({ where: { id: row.id } });
         return created;
       })
     );

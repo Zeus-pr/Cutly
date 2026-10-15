@@ -52,7 +52,7 @@ export async function recordResendEvent(event: ResendEvent) {
   if (!hit) return { stored: 0 };
   for (const email of hit.emails) {
     const hmac = emailHmac(email);
-    await prisma.emailSuppression.upsert({ where: { emailHmac: hmac }, create: { emailHmac: hmac, reason: hit.reason }, update: {} });
+    await prisma.emailSuppression.upsert({ where: { emailHmac: hmac }, create: { emailHmac: hmac, reason: hit.reason }, update: { reason: hit.reason, createdAt: new Date() } }); // DBA #58 item 8: a repeat bounce restarts the 24-month window
   }
   return { stored: hit.emails.length };
 }

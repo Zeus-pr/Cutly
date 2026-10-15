@@ -15,3 +15,8 @@ FROM "User" WHERE email IS NOT NULL GROUP BY lower(btrim(email)) HAVING count(*)
 UNION ALL
 SELECT 'Partner', string_agg(id, ',' ORDER BY id)
 FROM "Partner" WHERE email IS NOT NULL GROUP BY lower(btrim(email)) HAVING count(*) > 1;
+
+-- Runbook (DBA #58 item 7): if 20261015125929_t4_email_lowercase_check aborts on duplicates,
+-- nothing was changed. Fix the listed rows, then mark the failed migration rolled back and re-run:
+--   npx prisma migrate resolve --rolled-back 20261015125929_t4_email_lowercase_check
+--   npx prisma migrate deploy

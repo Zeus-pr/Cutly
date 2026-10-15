@@ -9,7 +9,8 @@ import {
   hashEmailCode,
   isRetryableTxError,
   maskEmail,
-  signupEmailVerifyOn
+  signupEmailVerifyOn,
+  emailConfigProblems
 } from '../backend/src/emailCode';
 import { canStillSignIn } from '../backend/src/emailRelease';
 import { codeMail, emailChangedMail, signupNoticeMail, DEFAULT_EMAIL_FROM } from '../backend/src/mail';
@@ -64,8 +65,10 @@ describe('T4 email codes', () => {
   });
 
   it('SIGNUP_EMAIL_VERIFY defaults on; "off" restores one-step signup', () => {
-    expect(signupEmailVerifyOn({})).toBe(true);
+    expect(signupEmailVerifyOn({})).toBe(false);
     expect(signupEmailVerifyOn({ SIGNUP_EMAIL_VERIFY: 'OFF' })).toBe(false);
+    expect(signupEmailVerifyOn({ SIGNUP_EMAIL_VERIFY: ' On ' })).toBe(true);
+    expect(signupEmailVerifyOn({ SIGNUP_EMAIL_VERIFY: 'yes' })).toBe(false);
   });
 
   it('retries only deadlocks / serialization failures', () => {
@@ -77,10 +80,26 @@ describe('T4 email codes', () => {
 
 describe('T4 release guard (DBA final (a))', () => {
   it('releases only when the holder can still sign in', () => {
-    expect(canStillSignIn({ phone: '+919000000001', googleSub: null, passwordHash: 'h' })).toBe(true);
-    expect(canStillSignIn({ phone: null, googleSub: 'g', passwordHash: 'h' })).toBe(true);
-    expect(canStillSignIn({ phone: null, googleSub: null, passwordHash: null })).toBe(true);
-    expect(canStillSignIn({ phone: null, googleSub: null, passwordHash: 'h' })).toBe(false);
+    expect(canStillSignIn({ phone: '+919000000001', googleSub: null })).toBe(true);
+    expect(canStillSignIn({ phone: null, googleSub: 'g' })).toBe(true);
+    // DBA #58 item 3: no phone and no Google → never released
+    expect(canStillSignIn({ phone: null, googleSub: null })).toBe(false);
+  });
+});
+
+describe('T4 startup config (DBA #58 item 1, Sec #58 item 4)', () => {
+  const K = 'a'.repeat(64);
+  it('needs both keys', () => {
+    expect(emailConfigProblems({ EMAIL_CODE_KEY: K, EMAIL_HASH_KEY: K })).toEqual([]);
+    expect(emailConfigProblems({ EMAIL_HASH_KEY: K })).toEqual(['EMAIL_CODE_KEY is not set (need at least 32 characters)']);
+    expect(emailConfigProblems({ EMAIL_CODE_KEY: K, EMAIL_HASH_KEY: 'short' })).toHaveLength(1);
+  });
+  it('refuses EMAIL_TRANSPORT=log in production only', () => {
+    expect(emailConfigProblems({ EMAIL_CODE_KEY: K, EMAIL_HASH_KEY: K, EMAIL_TRANSPORT: 'log', NODE_ENV: 'production' })).toEqual([
+      'EMAIL_TRANSPORT=log is not allowed when NODE_ENV=production'
+    ]);
+    expect(emailConfigProblems({ EMAIL_CODE_KEY: K, EMAIL_HASH_KEY: K, EMAIL_TRANSPORT: 'log', NODE_ENV: 'development' })).toEqual([]);
+    expect(emailConfigProblems({ EMAIL_CODE_KEY: K, EMAIL_HASH_KEY: K, EMAIL_TRANSPORT: 'resend', NODE_ENV: 'production' })).toEqual([]);
   });
 });
 

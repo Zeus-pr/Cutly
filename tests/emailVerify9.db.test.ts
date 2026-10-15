@@ -35,6 +35,7 @@ suite('T4 #9 email verification (database)', () => {
     process.env.JWT_SECRET = 'test-jwt-secret-for-t4';
     process.env.PHONE_HASH_KEY = 'test-phone-hash-key-0123456789';
     process.env.EMAIL_CODE_KEY = 'test-email-code-key-0123456789abcdef';
+    process.env.SIGNUP_EMAIL_VERIFY = 'on'; // default is off (PR Review #58)
     process.env.EMAIL_HASH_KEY = 'test-email-hash-key-0123456789abcdef';
     process.env.EMAIL_TRANSPORT = 'log';
     const { PrismaClient } = await import('@prisma/client');
@@ -207,13 +208,113 @@ suite('T4 #9 email verification (database)', () => {
     expect(me.body.data).toMatchObject({ email: null, emailVerified: false, emailReleased: true });
   });
 
-  it('§3 Google: a verified Google owner releases an unverified password squatter (was GOOGLE_LINK_AFTER_PASSWORD)', async () => {
+  it('PR Review #58 (a): Google on a pre-T4 unverified email → 409 GOOGLE_EMAIL_UNVERIFIED_OWNER; account and email untouched', async () => {
     const email = addr('gsq');
-    const sq = await squatter(email);
-    const s = await A.finishGoogleSignIn(`sub-${tag}-${++seq}`, email, 'Owner');
-    expect(s.user).toMatchObject({ email, emailVerified: true, googleLinked: true });
-    expect((await prisma.user.findUniqueOrThrow({ where: { id: sq.id } })).email).toBeNull();
-    expect(await prisma.emailRelease.findFirst({ where: { fromUserId: sq.id, reason: 'google_owner', toUserId: s.user.id } })).toBeTruthy();
+    // The real owner: an old password + phone account that never verified its email.
+    const owner = await squatter(email);
+    const before = await prisma.user.findUniqueOrThrow({ where: { id: owner.id } });
+    const sub = `sub-${tag}-${++seq}`;
+    await expect(A.finishGoogleSignIn(sub, email, 'Owner')).rejects.toMatchObject({
+      status: 409,
+      code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER',
+      message: expect.stringMatching(/phone number or password.*verify the email or link Google from Profile/)
+    });
+    const after = await prisma.user.findUniqueOrThrow({ where: { id: owner.id } });
+    expect(after).toEqual(before); // no field changed (email, emailVerified, googleSub, updatedAt)
+    expect(await prisma.user.count({ where: { googleSub: sub } })).toBe(0); // no split account
+    expect(await prisma.emailRelease.count({ where: { fromUserId: owner.id } })).toBe(0);
+  });
+
+  it('PR Review #58 (a): an existing Google profile without email does not take it from an unverified holder', async () => {
+    const email = addr('gsq2');
+    const owner = await squatter(email);
+    const sub = `sub-${tag}-${++seq}`;
+    const g = await prisma.user.create({ data: { googleSub: sub } });
+    await expect(A.finishGoogleSignIn(sub, email, 'G')).rejects.toMatchObject({ code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: owner.id } })).email).toBe(email);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: g.id } })).email).toBeNull();
+  });
+
+  it('Sec #58 item 3: linking Google while signed in refuses an unverified holder (same code) and leaves it untouched', async () => {
+    const email = addr('merge');
+    const owner = await squatter(email);
+    const me = await prisma.user.create({ data: { phone: phone() } });
+    await expect(A.linkGoogleToSignedIn(`sub-${tag}-${++seq}`, email, 'G', tokenFor(me))).rejects.toMatchObject({
+      code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER'
+    });
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: owner.id } })).email).toBe(email);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: me.id } })).googleSub).toBeNull();
+  });
+
+  it('Sec #58 item 3: linking Google while signed in runs the release step (other pendings/codes for the address go)', async () => {
+    clock = new Date();
+    const email = addr('merge2');
+    const pend = await E.startEmailSignup({ email, password: 'password123', phone: phone() }, deps());
+    const me = await prisma.user.create({ data: { phone: phone() } });
+    const s = await A.linkGoogleToSignedIn(`sub-${tag}-${++seq}`, email, 'G', tokenFor(me));
+    expect(s.user).toMatchObject({ id: me.id, email, emailVerified: true, googleLinked: true });
+    expect(await prisma.pendingSignup.count({ where: { id: pend.pendingId } })).toBe(0);
+    expect(await prisma.emailCode.count({ where: { pendingSignupId: pend.pendingId } })).toBe(0);
+  });
+
+  it('Sec #58 item 1: verifying one pending signup clears the others for that address (no User holder)', async () => {
+    clock = new Date();
+    const email = addr('multi');
+    const p1 = await E.startEmailSignup({ email, password: 'password123', phone: phone() }, deps());
+    const p2 = await E.startEmailSignup({ email, password: 'password123', phone: phone() }, deps());
+    const p3 = await E.startEmailSignup({ email, password: 'password123', phone: phone() }, deps());
+    await E.verifyEmailSignup(p3.pendingId, lastCode(email)!, deps());
+    expect(await prisma.pendingSignup.count({ where: { id: { in: [p1.pendingId, p2.pendingId, p3.pendingId] } } })).toBe(0);
+    expect(await prisma.emailCode.count({ where: { emailNorm: email } })).toBe(0);
+  });
+
+  it('PR Review #58 minors: phone taken while the code was out → 409 PHONE_TAKEN, and the code is NOT used up', async () => {
+    clock = new Date();
+    const email = addr('ph');
+    const ph = phone();
+    const start = await E.startEmailSignup({ email, password: 'password123', phone: ph }, deps());
+    const code = lastCode(email)!;
+    const taker = await prisma.user.create({ data: { phone: ph } });
+    await expect(E.verifyEmailSignup(start.pendingId, code, deps())).rejects.toMatchObject({ status: 409, code: 'PHONE_TAKEN' });
+    expect(await prisma.emailCode.count({ where: { pendingSignupId: start.pendingId } })).toBe(1);
+    // Once the clash is gone the same code still works (no new code needed).
+    await prisma.user.delete({ where: { id: taker.id } });
+    const s = await E.verifyEmailSignup(start.pendingId, code, deps());
+    expect(s.user).toMatchObject({ email, phone: ph, emailVerified: true });
+  });
+
+  it('DBA #58 item 5: EmailCode CHECK needs exactly one of userId / pendingSignupId', async () => {
+    const base = { emailNorm: addr('chk'), codeHmac: 'x', purpose: 'verify_existing', expiresAt: new Date(Date.now() + 60_000) };
+    await expect(prisma.emailCode.create({ data: base })).rejects.toThrow();
+    const u = await prisma.user.create({ data: { phone: phone() } });
+    const p = await prisma.pendingSignup.create({
+      data: { emailNorm: base.emailNorm, phone: phone(), passwordHash: 'x', expiresAt: new Date(Date.now() + 60_000) }
+    });
+    await expect(prisma.emailCode.create({ data: { ...base, userId: u.id, pendingSignupId: p.id } })).rejects.toThrow();
+    await expect(prisma.emailCode.create({ data: { ...base, userId: u.id } })).resolves.toBeTruthy();
+  });
+
+  it('DBA #58 item 8: a repeat hard bounce refreshes the suppression window', async () => {
+    const { recordResendEvent } = await import('../backend/src/resendWebhook');
+    const { emailHmac } = await import('../backend/src/emailCode');
+    const email = addr('bounce');
+    await recordResendEvent({ type: 'email.bounced', data: { to: email, bounce: { type: 'Permanent' } } });
+    const old = new Date(Date.now() - 400 * 86_400_000);
+    await prisma.emailSuppression.update({ where: { emailHmac: emailHmac(email) }, data: { createdAt: old } });
+    await recordResendEvent({ type: 'email.complained', data: { to: email } });
+    const row = await prisma.emailSuppression.findUniqueOrThrow({ where: { emailHmac: emailHmac(email) } });
+    expect(row.createdAt.getTime()).toBeGreaterThan(Date.now() - 60_000);
+    expect(row.reason).toBe('complaint');
+  });
+
+  it('Sec #58 item 2: /email/verify/send uses the per-address bucket', async () => {
+    const email = addr('bucket');
+    const u = await prisma.user.create({ data: { email, phone: phone() } });
+    const { rateLimit } = await import('../backend/src/rateLimit');
+    const { emailBucket } = await import('../backend/src/emailCode');
+    for (let i = 0; i < 5; i++) await rateLimit(`email-send-h:${emailBucket(email)}`, 5, 60 * 60_000);
+    const r = await call('POST', '/api/auth/email/verify/send', { token: tokenFor(u) });
+    expect(r.status).toBe(429);
   });
 
   it('manual review: an unverified password holder with no phone and no Google is NOT released (409 EMAIL_CLAIM_REVIEW)', async () => {
@@ -296,7 +397,7 @@ suite('T4 #9 email verification (database)', () => {
     const r = await call('PATCH', '/api/auth/profile', { token: tokenFor(u), body: { email: addr('other') } });
     expect(r).toMatchObject({ status: 400, body: { code: 'USE_EMAIL_CHANGE' } });
     const partner = await prisma.partner.create({ data: { email, passwordHash: 'x' } });
-    await A.finishGoogleSignIn(`sub-${tag}-${++seq}`, email, 'G');
+    await expect(A.finishGoogleSignIn(`sub-${tag}-${++seq}`, email, 'G')).rejects.toMatchObject({ code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' });
     expect((await prisma.partner.findUniqueOrThrow({ where: { id: partner.id } })).email).toBe(email);
   });
 

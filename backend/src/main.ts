@@ -10,6 +10,7 @@ import { startAwaitingExpirySweep } from './awaitingExpiry';
 import { startAccountPurgeSweep } from './accountPurge';
 import { startEmailCleanupSweep } from './emailCleanup';
 import { phoneHashKey } from './accountDeletion';
+import { emailConfigProblems } from './emailCode';
 import { resolveListenConfig } from './listenConfig';
 
 function fail(message: string, error?: unknown): never {
@@ -22,6 +23,12 @@ try {
   phoneHashKey();
 } catch (error) {
   fail(error instanceof Error ? error.message : 'PHONE_HASH_KEY is invalid', error);
+}
+
+// T4: email codes / address HMACs need their keys; log transport never runs in production.
+{
+  const problems = emailConfigProblems();
+  if (problems.length) fail(problems.join('; '));
 }
 
 let cfg: ReturnType<typeof resolveListenConfig>;

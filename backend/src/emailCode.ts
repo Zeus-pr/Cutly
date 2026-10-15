@@ -86,9 +86,29 @@ export function cleanCode(raw: string) {
   return /^\d{6}$/.test(code) ? code : null;
 }
 
-/** Signup on/off switch for old app builds (design §10). Default on. */
+/** Signup on/off switch (design §10). Default OFF (PR Review #58): only SIGNUP_EMAIL_VERIFY=on enables it. */
 export function signupEmailVerifyOn(env: Record<string, string | undefined> = process.env) {
-  return (env.SIGNUP_EMAIL_VERIFY || 'on').trim().toLowerCase() !== 'off';
+  return (env.SIGNUP_EMAIL_VERIFY || 'off').trim().toLowerCase() === 'on';
+}
+
+type Env = Record<string, string | undefined>;
+const envKeyOk = (env: Env, name: string) => (env[name]?.trim() || '').length >= 32;
+
+/**
+ * Startup check (DBA #58 item 1, Sec #58 item 4). Returns the problems; main.ts exits 1 on any.
+ * - EMAIL_CODE_KEY and EMAIL_HASH_KEY must be set (>= 32 chars)
+ * - EMAIL_TRANSPORT=log is refused when NODE_ENV=production
+ */
+export function emailConfigProblems(env: Env = process.env): string[] {
+  const problems: string[] = [];
+  for (const name of ['EMAIL_CODE_KEY', 'EMAIL_HASH_KEY']) {
+    if (!envKeyOk(env, name)) problems.push(`${name} is not set (need at least 32 characters)`);
+  }
+  const transport = (env.EMAIL_TRANSPORT || 'resend').trim().toLowerCase();
+  if (transport === 'log' && (env.NODE_ENV || '').trim().toLowerCase() === 'production') {
+    problems.push('EMAIL_TRANSPORT=log is not allowed when NODE_ENV=production');
+  }
+  return problems;
 }
 
 /** Postgres deadlock / serialization failure → worth one retry (DBA item 4). */

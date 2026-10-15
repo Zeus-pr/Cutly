@@ -17,7 +17,8 @@ import { AppError } from './httpError';
 import { archivedIdempotencyKey } from './money';
 import { notifyShopPartner } from './push';
 import { REAUTH_ACTION, consumeReauthToken, defaultVerifyGoogle, issueReauthToken, verifyReauthProof, type ReauthAction, type ReauthInput } from './reauth';
-import { canStillSignIn, notifyReleased, releaseUnverifiedHolders, ReleaseStale, setReleaseWinner } from './emailRelease';
+import { GOOGLE_EMAIL_UNVERIFIED_OWNER, releaseUnverifiedHolders, ReleaseStale } from './emailRelease';
+import { isRetryableTxError } from './emailCode';
 
 const prisma = new PrismaClient();
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -333,7 +334,7 @@ export type GoogleLinkPlan =
       reclaimEmail: string | null;
     }
   | { kind: 'create'; email: string | null; reclaimFromUserId: string | null; reclaimEmail: string | null }
-  | { kind: 'reject'; message: string };
+  | { kind: 'reject'; message: string; code?: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' };
 
 /**
  * SEC-03: link a verified Google email only to a CUTLY profile whose stored email
@@ -348,20 +349,22 @@ export function planGoogleLink(input: {
 }): GoogleLinkPlan {
   const { googleSub, trustedEmail, bySub, byEmail } = input;
   const other = byEmail && (!bySub || byEmail.id !== bySub.id) ? byEmail : null;
-  // T4 (#9) §3: an unverified address is a claim, not ownership, with or without a password.
-  const reclaimTarget = other && !other.emailVerified ? other : null;
+  // PR Review #58 blocker (a): an older account holding this address unverified may be the
+  // Google owner's own, so Google sign-in neither splits it nor releases the email.
+  if (trustedEmail && other && !other.emailVerified) {
+    return { kind: 'reject', message: GOOGLE_EMAIL_UNVERIFIED_OWNER().message, code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' };
+  }
 
   if (bySub) {
     const matchesStored = Boolean(trustedEmail && bySub.email && sameEmail(bySub.email, trustedEmail));
     const fillEmpty = Boolean(trustedEmail && !bySub.email && !other);
-    const reclaim = Boolean(trustedEmail && !bySub.email && reclaimTarget);
     return {
       kind: 'link',
       userId: bySub.id,
-      storeEmail: fillEmpty || reclaim ? trustedEmail : null,
-      markEmailVerified: matchesStored || fillEmpty || reclaim,
-      reclaimFromUserId: reclaim && reclaimTarget ? reclaimTarget.id : null,
-      reclaimEmail: reclaim && reclaimTarget?.email ? reclaimTarget.email : null
+      storeEmail: fillEmpty ? trustedEmail : null,
+      markEmailVerified: matchesStored || fillEmpty,
+      reclaimFromUserId: null,
+      reclaimEmail: null
     };
   }
 
@@ -380,15 +383,6 @@ export function planGoogleLink(input: {
     };
   }
 
-  if (reclaimTarget && trustedEmail) {
-    return {
-      kind: 'create',
-      email: trustedEmail,
-      reclaimFromUserId: reclaimTarget.id,
-      reclaimEmail: reclaimTarget.email
-    };
-  }
-
   return { kind: 'create', email: trustedEmail, reclaimFromUserId: null, reclaimEmail: null };
 }
 
@@ -401,7 +395,8 @@ export class GoogleLinkRetry extends Error {
 }
 
 export function shouldRetryGoogleLink(error: unknown) {
-  return error instanceof GoogleLinkRetry || isPrismaUniqueConflict(error);
+  // DBA #58 item 2: deadlock / serialization failures on the release path retry too.
+  return error instanceof GoogleLinkRetry || isPrismaUniqueConflict(error) || isRetryableTxError(error);
 }
 
 export function isPrismaUniqueConflict(error: unknown) {
@@ -427,7 +422,8 @@ export async function signInWithGoogle(idToken: string, mergeToken?: string) {
   }
 }
 
-async function linkGoogleToSignedIn(googleSub: string, email: string | null, name: string | null, mergeToken: string) {
+/** Exported for tests (Sec #58 item 3). */
+export async function linkGoogleToSignedIn(googleSub: string, email: string | null, name: string | null, mergeToken: string) {
   const signedIn = await userFromToken(mergeToken);
   const account = await prisma.user.findUnique({ where: { id: signedIn.id } });
   if (!account) throw new Error('Sign in again.');
@@ -443,40 +439,38 @@ async function linkGoogleToSignedIn(googleSub: string, email: string | null, nam
   if (!plan.ok) throw new Error(plan.message);
   if (!account.email && email) {
     const holders = await findUsersByEmail(email);
-    if (holders.some((row) => row.id !== account.id)) throw new Error('That email is already on another account.');
+    const others = holders.filter((row) => row.id !== account.id);
+    if (others.some((row) => row.emailVerified || isDeletionRequested(row))) throw new Error('That email is already on another account.');
+    if (others.length) throw GOOGLE_EMAIL_UNVERIFIED_OWNER();
   }
   let user;
   try {
-    user = await prisma.user.update({
-      where: { id: account.id },
-      data: {
-        googleSub,
-        email: account.email || email,
-        emailVerified: true,
-        name: account.name || name
+    // Sec #58 item 3: same release step as cold Google sign-in (locks, re-check, pendings/codes
+    // for the address invalidated); unverified holders are refused, never stripped (blocker (a)).
+    user = await prisma.$transaction(async (tx) => {
+      if (email) {
+        try {
+          await releaseUnverifiedHolders(tx, email, account.id, 'google_owner', { refuseUnverified: GOOGLE_EMAIL_UNVERIFIED_OWNER });
+        } catch (error) {
+          if (error instanceof ReleaseStale) throw new GoogleLinkRetry();
+          throw error;
+        }
       }
+      return tx.user.update({
+        where: { id: account.id },
+        data: {
+          googleSub,
+          email: account.email || email,
+          emailVerified: true,
+          name: account.name || name
+        }
+      });
     });
   } catch (error) {
-    if (isPrismaUniqueConflict(error)) throw new Error('That email is already on another account.');
+    if (isPrismaUniqueConflict(error) || error instanceof GoogleLinkRetry) throw new Error('That email is already on another account.');
     throw error;
   }
   return session(user);
-}
-
-/**
- * Move a typed, unverified email off a password-less row so Google can claim it.
- * DBA #10: never strips the email off an account that is pending deletion or purged (the row
- * may have become pending after the plan was made); the caller then retries the lookup.
- */
-export async function clearReclaimedEmail(tx: Prisma.TransactionClient, userId: string, email: string) {
-  // T4 (#9): password rows are reclaimable too, as long as they keep another way to sign in.
-  const row = await tx.user.findUnique({ where: { id: userId } });
-  if (row && !canStillSignIn(row)) throw new GoogleLinkRetry();
-  const cleared = await tx.user.updateMany({
-    where: { id: userId, email, emailVerified: false, deletionRequestedAt: null, deletedAt: null },
-    data: { email: null, emailVerified: false }
-  });
-  if (cleared.count !== 1) throw new GoogleLinkRetry();
 }
 
 const GOOGLE_SIGN_IN_FAILED = 'Google sign-in failed. Try again.';
@@ -528,15 +522,16 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
         }
       : null
   });
-  if (plan.kind === 'reject') throw new Error(plan.message);
+  if (plan.kind === 'reject') throw plan.code ? GOOGLE_EMAIL_UNVERIFIED_OWNER() : new Error(plan.message);
   const linked = plan.kind === 'link' ? (plan.userId === bySub?.id ? bySub : byEmail) : null;
-  let released: string[] = [];
   const user = await prisma.$transaction(async (tx) => {
-    if (plan.reclaimFromUserId) {
-      if (!plan.reclaimEmail || !email) throw new GoogleLinkRetry();
-      // T4 (#9): DBA-agreed release (id-ordered locks, exact re-check, audit row, codes invalidated).
+    if (email && (plan.kind === 'create' ? plan.email : plan.storeEmail)) {
+      // Re-check under lock (a holder may have appeared since the plan) and invalidate other
+      // pendings/codes for the address. Unverified holders are refused (blocker (a)).
       try {
-        released = await releaseUnverifiedHolders(tx, email, plan.kind === 'link' ? plan.userId : null, 'google_owner');
+        await releaseUnverifiedHolders(tx, email, plan.kind === 'link' ? plan.userId : null, 'google_owner', {
+          refuseUnverified: GOOGLE_EMAIL_UNVERIFIED_OWNER
+        });
       } catch (error) {
         if (error instanceof ReleaseStale) throw new GoogleLinkRetry();
         throw error;
@@ -546,7 +541,6 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
       const created = await tx.user.create({
         data: { googleSub, email: plan.email, emailVerified: Boolean(plan.email), name }
       });
-      await setReleaseWinner(tx, released, created.id);
       return created;
     }
     return tx.user.update({
@@ -559,7 +553,6 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
       }
     });
   });
-  notifyReleased(released);
   return session(user, user.id === restoredOwnerId);
 }
 
