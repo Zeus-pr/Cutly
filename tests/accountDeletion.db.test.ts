@@ -396,6 +396,73 @@ suite('T3 delete account (database)', () => {
     }
   }, 30_000);
 
+  it('DBA #5: a booking written concurrently with the delete request is serialised (cancelled, not orphaned)', async () => {
+    const { assertUserLive } = await import('../backend/src/customer');
+    const user = await prisma.user.create({ data: { phone: `+9188${String(Date.now()).slice(-8)}`, passwordHash: await bcrypt.hash('password123', 4) } });
+    const token = signToken({ id: user.id, email: null, phone: user.phone, name: null }, 'customer', 0);
+    const { shop, barber } = await seedShop('d5');
+    const re = await call('POST', '/api/auth/reauth', { token, body: { password: 'password123' } });
+    let go!: () => void;
+    const locked = new Promise<void>((r) => (go = r));
+    let bookingId = '';
+    const writer = prisma.$transaction(async (tx) => {
+      await assertUserLive(tx, user.id); // same first step as hold/book/reschedule
+      go();
+      await new Promise((r) => setTimeout(r, 400));
+      n += 1;
+      const b = await tx.booking.create({
+        data: {
+          userId: user.id, shopId: shop.id, barberId: barber.id, status: 'CONFIRMED',
+          startsAt: new Date(Date.now() + 86_400_000), endsAt: new Date(Date.now() + 86_400_000 + 1_800_000),
+          totalPaise: 1000, advancePaise: 0, bookingCode: `${tag}-d5`, idempotencyKey: `${tag}-d5`
+        }
+      });
+      bookingId = b.id;
+    });
+    await locked;
+    const del = await call('DELETE', '/api/auth/account', { token, reauth: re.body.data.reauthToken });
+    await writer;
+    expect(del.status).toBe(200);
+    expect(del.body.data.cancelledBookings).toBe(1);
+    expect((await prisma.booking.findUniqueOrThrow({ where: { id: bookingId } })).status).toBe('CANCELLED');
+    // After the request, the guard refuses new writes.
+    await expect(prisma.$transaction((tx) => assertUserLive(tx, user.id))).rejects.toThrow('Sign in again.');
+  });
+
+  it('DBA #10: Google sign-in never reclaims the email of a pending-deletion account', async () => {
+    const { finishGoogleSignIn } = await import('../backend/src/auth');
+    const email = `${tag}-g10@example.com`;
+    const pending = await prisma.user.create({ data: { email, emailVerified: false, deletionRequestedAt: new Date(Date.now() - 20 * 86_400_000) } });
+    await expect(finishGoogleSignIn(`sub-${tag}`, email, 'G')).rejects.toThrow();
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: pending.id } })).email).toBe(email);
+    expect(await prisma.user.count({ where: { googleSub: `sub-${tag}` } })).toBe(0);
+  });
+
+  it('DBA #6: shop search bounding box keeps near shops and drops far ones', async () => {
+    const near = await prisma.shop.create({ data: { name: 'near', address: 'a', city: 'c', latitude: 40.0, longitude: 10.0, setupDone: true } });
+    const far = await prisma.shop.create({ data: { name: 'far', address: 'a', city: 'c', latitude: 41.0, longitude: 10.0, setupDone: true } });
+    const res = await call('GET', '/api/shops?lat=40.05&lng=10.0&radiusKm=25');
+    expect(res.status).toBe(200);
+    const ids = (res.body.data as { id: string }[]).map((s) => s.id);
+    expect(ids).toContain(near.id);
+    expect(ids).not.toContain(far.id);
+  });
+
+  it('DBA #9: shops created by partner setup start ACTIVE with isActive in sync', async () => {
+    const email = `${tag}-s9@example.com`;
+    const partner = await prisma.partner.create({ data: { email } });
+    const token = signToken({ id: partner.id, email, phone: null, name: null }, 'partner', 0);
+    const res = await call('POST', '/api/partner/shop', {
+      token,
+      body: {
+        name: 'S9', address: 'A', city: 'C', latitude: 1, longitude: 1, kinds: ['BARBER'],
+        services: [{ name: 'Haircut', durationMinutes: 30, pricePaise: 20000 }], chairCount: 1, workersPresent: 1
+      }
+    });
+    expect(res.status).toBe(200);
+    expect(await prisma.shop.findUniqueOrThrow({ where: { ownerPartnerId: partner.id } })).toMatchObject({ status: 'ACTIVE', isActive: true });
+  });
+
   it('adminApp is importable and answers without a listener', async () => {
     const s = adminApp.listen(0, '127.0.0.1');
     await new Promise((r) => s.once('listening', r));

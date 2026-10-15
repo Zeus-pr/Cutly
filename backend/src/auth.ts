@@ -456,7 +456,8 @@ async function linkGoogleToSignedIn(googleSub: string, email: string | null, nam
 
 const GOOGLE_SIGN_IN_FAILED = 'Google sign-in failed. Try again.';
 
-async function finishGoogleSignIn(googleSub: string, email: string | null, name: string | null) {
+/** Exported for tests (DBA #10). */
+export async function finishGoogleSignIn(googleSub: string, email: string | null, name: string | null) {
   const subRow = await prisma.user.findUnique({ where: { googleSub } });
   // T3: Google sign-in within the grace window restores; after the deadline it fails.
   if (subRow && isDeletionRequested(subRow)) {
@@ -510,7 +511,10 @@ async function finishGoogleSignIn(googleSub: string, email: string | null, name:
           id: plan.reclaimFromUserId,
           email: plan.reclaimEmail,
           emailVerified: false,
-          passwordHash: null
+          passwordHash: null,
+          // DBA #10: never strip the email off an account that is pending deletion or purged.
+          deletionRequestedAt: null,
+          deletedAt: null
         },
         data: { email: null, emailVerified: false }
       });
@@ -665,6 +669,8 @@ export async function deleteCustomerAccount(token: string, reauthToken?: string 
   const current = await userFromToken(token);
   const result = await prisma.$transaction(async (tx) => {
     await consumeReauthToken(tx, secret(), reauthToken, current.id, 'customer', now);
+    // DBA #5: row lock so concurrent hold/book/reschedule (FOR SHARE in customer.ts) serialise with this.
+    await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${current.id} FOR UPDATE`;
     const user = await tx.user.findUniqueOrThrow({ where: { id: current.id } });
     if (isDeletionRequested(user)) throw new Error('Sign in again.');
     const inVisit = await tx.booking.count({

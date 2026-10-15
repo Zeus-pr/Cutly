@@ -301,9 +301,11 @@ export async function setupShop(token: string, input: {
     setupDone: true,
     ownerPartnerId: partner.id
   };
+  // DBA #9: this is the only place shops are created. New shops start ACTIVE with isActive in
+  // sync; re-running setup on an existing shop never changes its lifecycle status.
   const shop = owned
     ? await prisma.shop.update({ where: { id: owned.id }, data })
-    : await prisma.shop.create({ data });
+    : await prisma.shop.create({ data: { ...data, ...shopStatusData('ACTIVE') } });
   await prisma.shopService.deleteMany({ where: { shopId: shop.id } });
   await ensureServiceCategories();
   for (const item of input.services) {

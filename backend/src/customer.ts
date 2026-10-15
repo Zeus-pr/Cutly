@@ -218,10 +218,16 @@ export async function listNearbyShops(input: {
     .split(',')
     .map((h) => h.trim().toLowerCase())
     .filter(Boolean);
+  // DBA #6: bounding box first so Postgres can use Shop_active_lat_lng_idx; the exact
+  // haversine radius filter still runs below.
+  const dLat = radius / 111.32;
+  const dLng = radius / (111.32 * Math.max(0.01, Math.cos((lat * Math.PI) / 180)));
   const rows = await prisma.shop.findMany({
     where: {
       setupDone: true,
       status: 'ACTIVE',
+      latitude: { gte: lat - dLat, lte: lat + dLat },
+      longitude: { gte: lng - dLng, lte: lng + dLng },
       ...(kindSet.length
         ? {
             OR: [
@@ -307,6 +313,17 @@ export async function listNearbyShops(input: {
 
 export async function shopHours(id: string) {
   return getPublicShopHours(prisma, id);
+}
+
+/**
+ * T3 (DBA #5): pairs with the FOR UPDATE in deleteCustomerAccount. A hold/book/reschedule
+ * either commits before the delete request (and its booking is then cancelled by it), or
+ * sees deletionRequestedAt set and fails here. No new booking can slip in after the request.
+ */
+export async function assertUserLive(tx: Prisma.TransactionClient, userId: string) {
+  const rows = await tx.$queryRaw<{ ok: number }[]>`
+    SELECT 1 AS ok FROM "User" WHERE id = ${userId} AND "deletionRequestedAt" IS NULL AND "deletedAt" IS NULL FOR SHARE`;
+  if (!rows.length) throw new Error('Sign in again.');
 }
 
 /** T3-Q9: a CLOSED or purged shop answers 410 SHOP_CLOSED (deep links, favourites). */
@@ -837,6 +854,7 @@ export async function createHold(
   try {
     hold = await prisma.$transaction(async (tx) => {
       const now = new Date();
+      await assertUserLive(tx, user.id);
       // T3 case 39: lock the shop row (FOR SHARE) so a concurrent partner delete, which
       // UPDATEs the shop to CLOSED and releases its holds, either waits for this hold or
       // makes it fail here. No orphan hold can stay on a CLOSED shop.
@@ -1039,6 +1057,7 @@ export async function createBooking(token: string, input: {
   let booking;
   try {
     booking = await prisma.$transaction(async (tx) => {
+      await assertUserLive(tx, user.id);
       await tx.$executeRaw`SELECT id FROM "BookingHold" WHERE id = ${input.holdId} AND "userId" = ${user.id} FOR UPDATE`;
       const hold = await tx.bookingHold.findFirst({
         where: { id: input.holdId, userId: user.id }
@@ -1673,6 +1692,7 @@ export async function rescheduleBooking(
 
   try {
     await prisma.$transaction(async (tx) => {
+      await assertUserLive(tx, user.id);
       await tx.$executeRaw`SELECT id FROM "BookingHold" WHERE id = ${input.holdId} AND "userId" = ${user.id} FOR UPDATE`;
       const hold = await tx.bookingHold.findFirst({ where: { id: input.holdId, userId: user.id } });
       if (!hold || !isHoldAlive(hold.expiresAt)) {

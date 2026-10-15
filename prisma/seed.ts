@@ -20,7 +20,9 @@ async function main() {
       city: 'Burdwan',
       latitude: 23.2324,
       longitude: 87.8615,
-      setupDone: true
+      setupDone: true,
+      status: 'ACTIVE',
+      isActive: true
     }
   });
   await prisma.shopService.upsert({
