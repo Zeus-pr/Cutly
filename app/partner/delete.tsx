@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { Linking, ScrollView, Text, View } from 'react-native';
+import { SUPPORT_WHATSAPP_URL } from '@/constants/support';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -137,8 +138,10 @@ export default function PartnerDeleteScreen() {
               { label: 'Try again', role: 'confirm', onPress: () => void confirm() }
             ]);
           case 'opsOnly':
-            // No real support contact exists in the repo yet; don't open a placeholder number.
-            return appAlert('Contact CutLy support', out.message);
+            return appAlert('Contact CutLy support', out.message, [
+              { label: 'Not now', role: 'cancel' },
+              { label: 'Contact', role: 'confirm', onPress: () => void Linking.openURL(SUPPORT_WHATSAPP_URL) }
+            ]);
           case 'signedOut':
             return signedOut();
           default:
