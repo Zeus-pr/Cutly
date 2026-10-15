@@ -238,6 +238,19 @@ export default function EmailScreen() {
             >
               <Text style={s.link}>Resend code</Text>
             </PressScale>
+            {hasPassword ? (
+              <PressScale
+                style={[s.textBtn, { minHeight: 44, justifyContent: 'center' }]}
+                onPress={() => {
+                  setMethod('password');
+                  setError('');
+                }}
+                haptic
+                accessibilityRole="button"
+              >
+                <Text style={s.hint}>Use password instead</Text>
+              </PressScale>
+            ) : null}
           </>
         ) : method === 'password' ? (
           <>
