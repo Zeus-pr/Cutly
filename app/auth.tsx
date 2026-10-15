@@ -29,7 +29,7 @@ import { auth, save } from '@/services/auth';
 import { emailVerify } from '@/services/emailVerify';
 import { useColors, useThemeStore } from '@/store/useThemeStore';
 import { ApiError } from '@/utils/deleteFlow';
-import { SEND_FAILED_COPY, localDigits, resumablePending, type SignupStarted } from '@/utils/emailVerifyFlow';
+import { SEND_FAILED_COPY, displayPhone, localDigits, resumablePending, type SignupStarted } from '@/utils/emailVerifyFlow';
 import { customerProfileReady, useSessionStore } from '@/store/useSessionStore';
 import { fontFamily } from '@/constants/fonts';
 import { lightColors, radii, spacing } from '@/constants/theme';
@@ -423,7 +423,7 @@ export default function Auth() {
                 <View style={styles.field}>
                   <TextInput
                     style={styles.input}
-                    value={localPhone}
+                    value={localPhone.length === 10 ? displayPhone(`+91${localPhone}`) : localPhone}
                     onChangeText={(v) => {
                       setLocalPhone(localDigits(v));
                       setError('');
