@@ -7,11 +7,17 @@
 export class AppError extends Error {
   readonly status: number;
   readonly expose: true = true;
+  /** Stable machine-readable code for the app (e.g. ACCOUNT_PENDING_DELETION). */
+  readonly code?: string;
+  /** Extra JSON fields merged into the error body (e.g. { bookings }). */
+  readonly details?: Record<string, unknown>;
 
-  constructor(message: string, status = 400) {
+  constructor(message: string, status = 400, code?: string, details?: Record<string, unknown>) {
     super(message);
     this.name = 'AppError';
     this.status = status;
+    this.code = code;
+    this.details = details;
   }
 }
 
@@ -26,9 +32,21 @@ const SAFE_EXACT = new Set([
   'We cannot find the page you are looking for.'
 ]);
 
-export function toClientError(error: unknown): { status: number; message: string } {
+export type ClientError = {
+  status: number;
+  message: string;
+  code?: string;
+  details?: Record<string, unknown>;
+};
+
+export function toClientError(error: unknown): ClientError {
   if (error instanceof AppError) {
-    return { status: error.status, message: error.message.slice(0, 200) };
+    return {
+      status: error.status,
+      message: error.message.slice(0, 200),
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.details ? { details: error.details } : {})
+    };
   }
   if (!(error instanceof Error) || !error.message.trim()) {
     console.error('[api]', error);
@@ -44,4 +62,9 @@ export function toClientError(error: unknown): { status: number; message: string
   }
   // Domain throws use short plain English — keep them for UX.
   return { status: 400, message: message.slice(0, 180) };
+}
+
+/** JSON body for an error response: `{ error, code?, ...details }`. */
+export function clientErrorBody(err: ClientError) {
+  return { ...(err.details || {}), error: err.message, ...(err.code ? { code: err.code } : {}) };
 }

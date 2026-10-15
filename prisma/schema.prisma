@@ -37,6 +37,12 @@ enum ShopKind {
   TATTOO
   PIERCING
 }
+/// Shop lifecycle (T3). Listings show ACTIVE only. CLOSED = partner account deleted or pending deletion.
+enum ShopStatus {
+  ACTIVE
+  PAUSED
+  CLOSED
+}
 enum WalkInStatus {
   ACTIVE
   COMPLETED
@@ -50,6 +56,12 @@ model Partner {
   passwordHash String?
   googleSub String? @unique
   pushToken String?
+  /** T3: set when the owner asks to delete the account. Sign-in before + ACCOUNT_DELETION_GRACE_DAYS restores. */
+  deletionRequestedAt DateTime?
+  /** T3: set by the purge job once PII is blanked. Row is kept for finance/history links. */
+  deletedAt DateTime?
+  /** T3: JWT `tv` claim must match. Bumped when deletion is requested. */
+  tokenVersion Int @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   shops Shop[]
@@ -70,6 +82,12 @@ model User {
   /** True only after Google proves this address. Typed emails stay false (SEC-03). */
   emailVerified Boolean @default(false)
   pushToken String?
+  /** T3: set when the owner asks to delete the account. Sign-in before + ACCOUNT_DELETION_GRACE_DAYS restores. */
+  deletionRequestedAt DateTime?
+  /** T3: set by the purge job once PII is blanked. Row is kept for finance/history links. */
+  deletedAt DateTime?
+  /** T3: JWT `tv` claim must match. Bumped when deletion is requested. */
+  tokenVersion Int @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   bookings Booking[]
@@ -96,7 +114,12 @@ model Shop {
   latitude Decimal
   longitude Decimal
   timezone String @default("Asia/Kolkata")
+  /** @deprecated T3: use `status`. Kept in sync (isActive = status == ACTIVE) for one release, then dropped. */
   isActive Boolean @default(true)
+  /** T3 lifecycle source of truth for listings. `acceptingAppointments` stays the day-to-day toggle. */
+  status ShopStatus @default(ACTIVE)
+  /** T3: set by the purge job when the owning partner is purged. CLOSED + null = closed, pending purge. */
+  deletedAt DateTime?
   /** Partner Home toggle — false = closed on customer side (still listed). */
   acceptingAppointments Boolean @default(true)
   /** IST end of today’s hours — blocks new bookings for today only until this instant. */
@@ -249,6 +272,8 @@ model Booking {
   @@index([barberId, startsAt, endsAt])
   @@index([userId, createdAt])
   @@index([status, startsAt])
+  /// T3: created CONCURRENTLY in 20261015000200.
+  @@index([shopId, startsAt])
 }
 model BookingService {
   bookingId String
@@ -282,6 +307,8 @@ model BookingHold {
   expiresAt DateTime
   idempotencyKey String @unique
   @@index([barberId, startsAt, expiresAt])
+  /// T3: created CONCURRENTLY in 20261015000300.
+  @@index([userId])
 }
 /** Partner floor walk-in — occupies a barber + chair like a booking (CJ-23). */
 model WalkIn {
@@ -362,3 +389,37 @@ model PartnerLead {
   @@index([createdAt])
   @@index([phone, createdAt])
 }
+
+/// T3 abuse checks only (repeat no-shows, promo farming after delete + re-signup).
+/// phoneHmac = HMAC-SHA256(PHONE_HASH_KEY, E.164 phone). Rows purged 12 months after deletedAt.
+model DeletedIdentity {
+  id        String   @id @default(cuid())
+  phoneHmac String
+  deletedAt DateTime @default(now())
+  /** customer_deleted | partner_deleted */
+  reason    String
+
+  @@index([phoneHmac])
+  @@index([deletedAt])
+}
+
+/// T3 one-time step-up grant (5 min) for destructive account actions. id = reauth JWT jti.
+model ReauthGrant {
+  id        String    @id
+  subjectId String
+  /** customer | partner */
+  audience  String
+  action    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
+// Raw-SQL objects Prisma cannot express (drift notes; `prisma migrate diff` ignores them):
+// - booking_barber_no_overlap / hold_barber_no_overlap EXCLUDE constraints (20261003154500)
+// - User_email_lower_idx expression index (20261014020000)
+// - T3 partial indexes: Shop_active_lat_lng_idx WHERE status = 'ACTIVE' (20261015000100),
+//   User_purge_due_idx (20261015000400) and Partner_purge_due_idx (20261015000500)
+//   WHERE "deletedAt" IS NULL AND "deletionRequestedAt" IS NOT NULL

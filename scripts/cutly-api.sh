@@ -9,7 +9,7 @@ LOG="$RUN/cutly-api.log"
 PIDFILE="$RUN/cutly-api.pid"
 PORT=4000
 HEALTH="http://127.0.0.1:${PORT}/health"
-SERVER="$ROOT/backend/src/server.ts"
+SERVER="$ROOT/backend/src/main.ts"
 
 # launchd PATH is tiny — Homebrew node must be explicit.
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"

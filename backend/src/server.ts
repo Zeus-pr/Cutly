@@ -1,4 +1,9 @@
-process.loadEnvFile();
+// Tests import this module without a .env file; the real entry is backend/src/main.ts.
+try {
+  process.loadEnvFile();
+} catch {
+  // no .env: rely on the process environment
+}
 import path from 'node:path';
 import express from 'express';
 import cors from 'cors';
@@ -24,6 +29,7 @@ import {
 import { createPartnerLead } from './partnerLeads';
 import {
   deleteCustomerAccount,
+  startCustomerReauth,
   sendPhoneOtp,
   signIn,
   signInWithGoogle,
@@ -49,6 +55,7 @@ import {
   setPartnerHours,
   setupShop,
   startBookingWithVerifyPin,
+  startPartnerReauth,
   updateAmenities,
   updateBarbers,
   updateFloor,
@@ -60,7 +67,6 @@ import {
   updateShopProfile
 } from './partner';
 import { PARTNER_FLOOR_TARGETS } from './bookingState';
-import { startAwaitingExpirySweep } from './awaitingExpiry';
 import { WALK_IN_DURATIONS } from './walkins';
 import {
   abandonBookingPayment,
@@ -91,10 +97,9 @@ import {
   markNotificationRead
 } from './notifications';
 import { clientKey, rateLimit } from './rateLimit';
-import { toClientError } from './httpError';
-const app = express();
+import { clientErrorBody, toClientError } from './httpError';
+export const app = express();
 app.set('trust proxy', 1);
-const port = Number(process.env.PORT || 4000);
 const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:8081,http://127.0.0.1:8081,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,https://cutly.buzz,https://www.cutly.buzz')
   .split(',')
   .map((s) => s.trim())
@@ -127,8 +132,8 @@ async function handle(res: express.Response, action: () => Promise<unknown>) {
   try {
     res.status(200).json({ data: await action() });
   } catch (error) {
-    const { status, message } = toClientError(error);
-    res.status(status).json({ error: message });
+    const err = toClientError(error);
+    res.status(err.status).json(clientErrorBody(err));
   }
 }
 app.post('/api/auth/signup', async (req, res) => {
@@ -183,10 +188,34 @@ function bearer(req: express.Request) {
   const header = req.header('authorization') || '';
   return header.startsWith('Bearer ') ? header.slice(7) : '';
 }
+/** T3 step-up proof: { password } | { code } (SMS to the account's own phone) | { googleIdToken }. */
+const reauthSchema = z.union([
+  z.object({ password: z.string().min(1).max(200) }).transform((v) => ({ method: 'password' as const, password: v.password })),
+  z.object({ code: z.string().regex(/^\d{6}$/) }).transform((v) => ({ method: 'otp' as const, code: v.code })),
+  z.object({ googleIdToken: z.string().min(20) }).transform((v) => ({ method: 'google' as const, idToken: v.googleIdToken }))
+]);
+async function reauthLimited(req: express.Request, res: express.Response, who: string) {
+  const byIp = await rateLimit(clientKey(req, `reauth-${who}`), 5, 15 * 60_000);
+  const byToken = await rateLimit(`reauth-${who}-tok:${bearer(req).slice(-24)}`, 5, 15 * 60_000);
+  const limited = !byIp.ok ? byIp : !byToken.ok ? byToken : null;
+  if (!limited) return false;
+  res.setHeader('Retry-After', String(limited.retryAfterSec));
+  res.status(429).json({ error: `Too many attempts. Try again in ${limited.retryAfterSec}s.` });
+  return true;
+}
+app.post('/api/auth/reauth', async (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  if (await reauthLimited(req, res, 'customer')) return;
+  const parsed = reauthSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Confirm with your password, an SMS code, or Google.' });
+  return handle(res, () => startCustomerReauth(token, parsed.data));
+});
+/** T3: soft delete; requires a one-time X-Reauth-Token from POST /api/auth/reauth. */
 app.delete('/api/auth/account', (req, res) => {
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
-  return handle(res, () => deleteCustomerAccount(token));
+  return handle(res, () => deleteCustomerAccount(token, req.header('x-reauth-token')));
 });
 app.get('/api/auth/me', (req, res) => {
   const token = bearer(req);
@@ -456,10 +485,19 @@ app.patch('/api/partner/walk-ins/:id/status', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Pick Done or Cancel.' });
   return handle(res, () => updatePartnerWalkInStatus(token, req.params.id, parsed.data.status));
 });
+app.post('/api/partner/reauth', async (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  if (await reauthLimited(req, res, 'partner')) return;
+  const parsed = reauthSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Confirm with your password, an SMS code, or Google.' });
+  return handle(res, () => startPartnerReauth(token, parsed.data));
+});
+/** T3: soft delete; requires a one-time X-Reauth-Token from POST /api/partner/reauth. */
 app.delete('/api/partner/account', (req, res) => {
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
-  return handle(res, () => deletePartnerAccount(token));
+  return handle(res, () => deletePartnerAccount(token, req.header('x-reauth-token')));
 });
 app.patch('/api/auth/profile', (req, res) => {
   const token = bearer(req);
@@ -738,10 +776,14 @@ app.post('/api/bookings/hold', async (req, res) => {
 /**
  * Ops admin (SEC-01/05): loopback-only + strong ADMIN_SECRET + rate limit.
  * Admin UI talks to http://127.0.0.1:4000 — not the public tunnel.
+ * Routes live on `adminRouter`, mounted on `app` (unchanged behaviour) and on the
+ * standalone `adminApp` so tests can hit admin without a listener. T2 (#7) moves admin
+ * to its own 127.0.0.1:4001 listener and drops the mount on `app`.
  */
-app.get('/api/admin/ping', (req, res) => runAdmin(req, res, () => adminPing()));
-app.get('/api/admin/partners', (req, res) => runAdmin(req, res, () => adminListPartners()));
-app.post('/api/admin/partners', (req, res) => {
+export const adminRouter = express.Router();
+adminRouter.get('/api/admin/ping', (req, res) => runAdmin(req, res, () => adminPing()));
+adminRouter.get('/api/admin/partners', (req, res) => runAdmin(req, res, () => adminListPartners()));
+adminRouter.post('/api/admin/partners', (req, res) => {
   const parsed = z
     .object({
       email: emailSchema,
@@ -754,15 +796,15 @@ app.post('/api/admin/partners', (req, res) => {
   }
   return runAdmin(req, res, () => adminCreatePartner(parsed.data));
 });
-app.patch('/api/admin/partners/:id/password', (req, res) => {
+adminRouter.patch('/api/admin/partners/:id/password', (req, res) => {
   const parsed = z.object({ password: passwordSchema }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   return runAdmin(req, res, () => adminSetPartnerPassword(String(req.params.id), parsed.data.password));
 });
-app.post('/api/admin/partners/:id/token', (req, res) =>
+adminRouter.post('/api/admin/partners/:id/token', (req, res) =>
   runAdmin(req, res, () => adminMintPartnerToken(String(req.params.id)))
 );
-app.get('/api/admin/leads', (req, res) =>
+adminRouter.get('/api/admin/leads', (req, res) =>
   runAdmin(req, res, () => {
     const limit = Number(req.query.limit) || 100;
     return adminListLeads(limit);
@@ -770,11 +812,11 @@ app.get('/api/admin/leads', (req, res) =>
 );
 
 /** Global category → SKU catalogue (CJ-71). */
-app.get('/api/admin/catalogue', (req, res) => runAdmin(req, res, () => adminListCatalogue()));
-app.post('/api/admin/catalogue/migrate', (req, res) =>
+adminRouter.get('/api/admin/catalogue', (req, res) => runAdmin(req, res, () => adminListCatalogue()));
+adminRouter.post('/api/admin/catalogue/migrate', (req, res) =>
   runAdmin(req, res, () => autoMigrateServiceCategories())
 );
-app.post('/api/admin/catalogue/categories', (req, res) => {
+adminRouter.post('/api/admin/catalogue/categories', (req, res) => {
   const parsed = z
     .object({
       label: z.string().trim().min(2).max(60),
@@ -785,7 +827,7 @@ app.post('/api/admin/catalogue/categories', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Category name required.' });
   return runAdmin(req, res, () => adminCreateCategory(parsed.data));
 });
-app.post('/api/admin/catalogue/services', (req, res) => {
+adminRouter.post('/api/admin/catalogue/services', (req, res) => {
   const parsed = z
     .object({
       categoryId: z.string().trim().min(1),
@@ -797,7 +839,7 @@ app.post('/api/admin/catalogue/services', (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'categoryId + name required.' });
   return runAdmin(req, res, () => adminCreateCatalogueService(parsed.data));
 });
-app.patch('/api/admin/catalogue/services/:id', (req, res) => {
+adminRouter.patch('/api/admin/catalogue/services/:id', (req, res) => {
   const parsed = z
     .object({
       categoryId: z.string().trim().min(1).optional(),
@@ -814,9 +856,14 @@ app.patch('/api/admin/catalogue/services/:id', (req, res) => {
     return last;
   });
 });
-app.delete('/api/admin/catalogue/services/:id', (req, res) =>
+adminRouter.delete('/api/admin/catalogue/services/:id', (req, res) =>
   runAdmin(req, res, () => adminRemoveCatalogueService(String(req.params.id)))
 );
+
+app.use(adminRouter);
+export const adminApp = express();
+adminApp.use(express.json({ limit: '1mb' }));
+adminApp.use(adminRouter);
 
 /** Public Partner With Us lead — no auth. */
 app.post('/api/public/partner-leads', async (req, res) => {
@@ -898,14 +945,6 @@ app.use((req, res, next) => {
   });
 });
 
-if (process.env.NODE_ENV !== 'test') {
-  // Bind all interfaces so Cloudflare Tunnel / LAN devices can reach the API.
-  app.listen(port, '0.0.0.0', () =>
-    console.log(
-      `CUTLY API listening on 0.0.0.0:${port} · payments=${paymentsEnabled() ? 'razorpay-test' : 'off'}`
-    )
-  );
-  // Auto-expire missed AWAITING_SHOP while API is awake; expire-on-read covers app open.
-  startAwaitingExpirySweep(60_000);
-}
+// No listen() here: importing this module must not start servers (Tester).
+// Process entry (listen + background sweeps): backend/src/main.ts.
 export default app;

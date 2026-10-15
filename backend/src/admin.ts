@@ -129,6 +129,7 @@ export async function adminListPartners() {
           phone: true,
           setupDone: true,
           isActive: true,
+          status: true,
           kinds: true,
           kind: true,
           acceptingAppointments: true
@@ -144,6 +145,9 @@ export async function adminListPartners() {
       name: p.name,
       phone: p.phone,
       createdAt: p.createdAt.toISOString(),
+      /** T3: flagged pending (grace) or purged; not an active partner. */
+      deletionRequestedAt: p.deletionRequestedAt?.toISOString() ?? null,
+      deletedAt: p.deletedAt?.toISOString() ?? null,
       shop: shop
         ? {
             id: shop.id,
@@ -152,6 +156,7 @@ export async function adminListPartners() {
             phone: shop.phone,
             setupDone: shop.setupDone,
             isActive: shop.isActive,
+            status: shop.status,
             kinds: shop.kinds?.length ? shop.kinds : shop.kind ? [shop.kind] : [],
             acceptingAppointments: shop.acceptingAppointments
           }
@@ -180,6 +185,7 @@ export async function adminSetPartnerPassword(partnerId: string, password: strin
 export async function adminMintPartnerToken(partnerId: string) {
   const partner = await prisma.partner.findUnique({ where: { id: partnerId } });
   if (!partner) throw new Error('Partner not found.');
+  if (partner.deletionRequestedAt || partner.deletedAt) throw new Error('This partner account is pending deletion.');
   const profile = {
     id: partner.id,
     email: partner.email,
@@ -187,7 +193,7 @@ export async function adminMintPartnerToken(partnerId: string) {
     name: partner.name
   };
   return {
-    token: signToken(profile, 'partner'),
+    token: signToken(profile, 'partner', partner.tokenVersion),
     partner: profile
   };
 }

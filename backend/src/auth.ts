@@ -4,6 +4,18 @@ import { OAuth2Client } from 'google-auth-library';
 import twilio from 'twilio';
 import { Prisma, PrismaClient, type User } from '@prisma/client';
 import { assertDateOfBirth } from '../../utils/dateOfBirth';
+import {
+  CUSTOMER_CANCEL_ON_DELETE_STATUSES,
+  CUSTOMER_IN_VISIT_STATUSES,
+  deletionDeadline,
+  deletionState,
+  isDeletionRequested
+} from './accountDeletion';
+import { cancelPolicy } from './cancelPolicy';
+import { AppError } from './httpError';
+import { archivedIdempotencyKey } from './money';
+import { notifyShopPartner } from './push';
+import { consumeReauthToken, defaultVerifyGoogle, issueReauthToken, verifyReauthProof, type ReauthInput } from './reauth';
 
 const prisma = new PrismaClient();
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -63,8 +75,47 @@ function dateOnly(value: Date | null | undefined) {
   return `${y}-${m}-${d}`;
 }
 
-export function signToken(user: PublicUser, audience: 'customer' | 'partner' = 'customer') {
-  return jwt.sign({ sub: user.id, email: user.email, phone: user.phone, aud: audience }, secret(), { expiresIn: '30d' });
+/**
+ * T3: `tv` = the account's tokenVersion at sign-in. Bumping tokenVersion (delete request)
+ * revokes every older token. Tokens without `tv` (issued before T3) count as 0.
+ */
+export function signToken(user: PublicUser, audience: 'customer' | 'partner' = 'customer', tokenVersion = 0) {
+  return jwt.sign(
+    { sub: user.id, email: user.email, phone: user.phone, aud: audience, tv: tokenVersion },
+    secret(),
+    { expiresIn: '30d' }
+  );
+}
+
+export function tokenVersionMatches(payload: object, tokenVersion: number) {
+  const raw = (payload as { tv?: unknown }).tv;
+  const tv = typeof raw === 'number' ? raw : 0;
+  return tv === tokenVersion;
+}
+
+function session(user: User) {
+  const profile = publicUser(user);
+  return { token: signToken(profile, 'customer', user.tokenVersion), user: profile };
+}
+
+export const ACCOUNT_PENDING_DELETION = () =>
+  new AppError('This account is pending deletion. Sign in to restore it.', 409, 'ACCOUNT_PENDING_DELETION');
+
+/**
+ * T3: a sign-in inside the grace window restores the account (nothing was blanked).
+ * Past the deadline it is treated as purged → the caller's generic auth failure.
+ * Returns the usable row, or null when the sign-in must fail.
+ */
+async function signInGate(user: User, now = new Date()): Promise<User | null> {
+  const state = deletionState(user, now);
+  if (state === 'active') return user;
+  if (state !== 'pending') return null;
+  const restored = await prisma.user.updateMany({
+    where: { id: user.id, deletedAt: null, deletionRequestedAt: user.deletionRequestedAt },
+    data: { deletionRequestedAt: null }
+  });
+  if (restored.count !== 1) return null;
+  return prisma.user.findUnique({ where: { id: user.id } });
 }
 
 /** SEC-08: same message for email/phone taken — no account enumeration. */
@@ -92,8 +143,12 @@ async function findUsersByEmail(email: string) {
 export async function signUp(email: string, password: string, phone: string, name?: string) {
   const normalised = normalEmail(email);
   const existing = await findUsersByEmail(normalised);
-  if (existing.length) throw new Error(SIGNUP_TAKEN);
   const phoneTaken = await prisma.user.findUnique({ where: { phone } });
+  // T3-Q6: same phone/email as an account in its grace window → tell them to sign in (restores).
+  if ([...existing, ...(phoneTaken ? [phoneTaken] : [])].some((row) => deletionState(row) === 'pending')) {
+    throw ACCOUNT_PENDING_DELETION();
+  }
+  if (existing.length) throw new Error(SIGNUP_TAKEN);
   if (phoneTaken) throw new Error(SIGNUP_TAKEN);
   const user = await prisma.user.create({
     data: {
@@ -103,8 +158,7 @@ export async function signUp(email: string, password: string, phone: string, nam
       passwordHash: await bcrypt.hash(password, 10)
     }
   });
-  const profile = publicUser(user);
-  return { token: signToken(profile), user: profile };
+  return session(user);
 }
 
 export async function userFromToken(token: string) {
@@ -120,6 +174,8 @@ export async function userFromToken(token: string) {
   if (!id) throw new Error('Sign in again.');
   const user = await prisma.user.findUnique({ where: { id } });
   if (!user) throw new Error('Sign in again.');
+  // T3: deletion requested (grace or purged) or token issued before a revocation.
+  if (isDeletionRequested(user) || !tokenVersionMatches(payload, user.tokenVersion ?? 0)) throw new Error('Sign in again.');
   return publicUser(user);
 }
 
@@ -191,8 +247,8 @@ export async function signIn(email: string, password: string) {
   const matches = await findUsersByEmail(email);
   for (const user of matches) {
     if (user.passwordHash && (await bcrypt.compare(password, user.passwordHash))) {
-      const profile = publicUser(user);
-      return { token: signToken(profile), user: profile };
+      const usable = await signInGate(user);
+      if (usable) return session(usable);
     }
   }
   throw new Error('Email or password is incorrect.');
@@ -394,13 +450,30 @@ async function linkGoogleToSignedIn(googleSub: string, email: string | null, nam
     if (isPrismaUniqueConflict(error)) throw new Error('That email is already on another account.');
     throw error;
   }
-  const profile = publicUser(user);
-  return { token: signToken(profile), user: profile };
+  return session(user);
 }
 
+const GOOGLE_SIGN_IN_FAILED = 'Google sign-in failed. Try again.';
+
 async function finishGoogleSignIn(googleSub: string, email: string | null, name: string | null) {
-  const bySub = await prisma.user.findUnique({ where: { googleSub } });
-  const emailRows = email ? await findUsersByEmail(email) : [];
+  const subRow = await prisma.user.findUnique({ where: { googleSub } });
+  // T3: Google sign-in within the grace window restores; after the deadline it fails.
+  if (subRow && isDeletionRequested(subRow)) {
+    const usable = await signInGate(subRow);
+    if (!usable) throw new Error(GOOGLE_SIGN_IN_FAILED);
+    return session(usable);
+  }
+  const bySub = subRow;
+  let emailRows = email ? await findUsersByEmail(email) : [];
+  const pendingOwner = emailRows.find((row) => isDeletionRequested(row));
+  if (pendingOwner) {
+    const sameGoogle = !pendingOwner.googleSub || pendingOwner.googleSub === googleSub;
+    if (!bySub && pendingOwner.emailVerified && sameGoogle && (await signInGate(pendingOwner))) {
+      emailRows = email ? await findUsersByEmail(email) : [];
+    } else {
+      throw new Error(GOOGLE_SIGN_IN_FAILED);
+    }
+  }
   const byEmail = preferEmailOwner(
     emailRows.map((row) => ({ ...row, hasPassword: Boolean(row.passwordHash) }))
   );
@@ -457,8 +530,7 @@ async function finishGoogleSignIn(googleSub: string, email: string | null, name:
       }
     });
   });
-  const profile = publicUser(user);
-  return { token: signToken(profile), user: profile };
+  return session(user);
 }
 
 let verifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID || '';
@@ -506,7 +578,8 @@ export async function sendPhoneOtp(phone: string) {
   });
 }
 
-export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: string) {
+/** Twilio Verify check. True only when the code is approved for this phone. */
+export async function checkPhoneOtpCode(phone: string, code: string) {
   const { client, serviceSid } = await verifyService();
   let status = '';
   try {
@@ -515,7 +588,11 @@ export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: s
   } catch (error) {
     twilioError(error);
   }
-  if (status !== 'approved') throw new Error('That code is incorrect or expired.');
+  return status === 'approved';
+}
+
+export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: string) {
+  if (!(await checkPhoneOtpCode(phone, code))) throw new Error('That code is incorrect or expired.');
   await prisma.phoneOtp.deleteMany({ where: { phone } });
 
   const byPhone = await prisma.user.findUnique({ where: { phone } });
@@ -530,7 +607,7 @@ export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: s
       if (!signedIn.phone) {
         if (byPhone && byPhone.id !== signedIn.id) {
           // Phone-only stub with no email/google → fold into signed-in account.
-          if (!byPhone.email && !byPhone.googleSub && !byPhone.passwordHash) {
+          if (!byPhone.email && !byPhone.googleSub && !byPhone.passwordHash && !isDeletionRequested(byPhone)) {
             await prisma.$transaction(async (tx) => {
               await tx.booking.updateMany({ where: { userId: byPhone.id }, data: { userId: signedIn.id } });
               await tx.favouriteShop.updateMany({ where: { userId: byPhone.id }, data: { userId: signedIn.id } });
@@ -546,8 +623,7 @@ export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: s
           await prisma.user.update({ where: { id: signedIn.id }, data: { phone } });
         }
         const merged = await prisma.user.findUniqueOrThrow({ where: { id: signedIn.id } });
-        const profile = publicUser(merged);
-        return { token: signToken(profile), user: profile };
+        return session(merged);
       }
     } catch (err) {
       if (err instanceof Error && !/Sign in again|token/i.test(err.message)) throw err;
@@ -555,30 +631,82 @@ export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: s
     }
   }
 
+  if (byPhone && isDeletionRequested(byPhone)) {
+    // T3: OTP sign-in is the restore path inside the grace window.
+    const usable = await signInGate(byPhone);
+    if (!usable) throw new Error('That code is incorrect or expired.');
+    return session(usable);
+  }
   const user = byPhone || (await prisma.user.create({ data: { phone } }));
-  const profile = publicUser(user);
-  return { token: signToken(profile), user: profile };
+  return session(user);
 }
 
-/** Removes the customer login and their bookings, holds, and saved places. */
-export async function deleteCustomerAccount(token: string) {
-  const user = await userFromToken(token);
-  const bookings = await prisma.booking.findMany({ where: { userId: user.id }, select: { id: true } });
-  const ids = bookings.map((row) => row.id);
-  await prisma.$transaction(async (tx) => {
-    if (ids.length) {
-      await tx.review.deleteMany({ where: { bookingId: { in: ids } } });
-      await tx.bookingPayment.deleteMany({ where: { bookingId: { in: ids } } });
-      await tx.bookingService.deleteMany({ where: { bookingId: { in: ids } } });
-      await tx.booking.deleteMany({ where: { id: { in: ids } } });
+/** T3 step-up: POST /api/auth/reauth → one-time 5-minute token for DELETE /api/auth/account. */
+export async function startCustomerReauth(token: string, input: ReauthInput) {
+  const current = await userFromToken(token);
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: current.id } });
+  await verifyReauthProof(user, input, { checkOtp: checkPhoneOtpCode, verifyGoogle: defaultVerifyGoogle });
+  if (input.method === 'otp' && user.phone) await prisma.phoneOtp.deleteMany({ where: { phone: user.phone } });
+  return issueReauthToken(prisma, secret(), user.id, 'customer');
+}
+
+/**
+ * T3 soft delete (customer). One transaction:
+ * - refuse while a visit is in progress (409 VISIT_IN_PROGRESS)
+ * - cancel upcoming bookings (refund marking follows the normal cancel policy; DB-only today)
+ * - set deletionRequestedAt, bump tokenVersion (all sessions die), clear pushToken,
+ *   release holds, delete PhoneOtp rows for the phone.
+ * PII, favourites, saved places and notifications stay until the purge job runs
+ * (deadline = deletionRequestedAt + grace) so a sign-in inside the window restores everything.
+ * Bookings, payments and reviews are always kept (finance records, shop history).
+ */
+export async function deleteCustomerAccount(token: string, reauthToken?: string | null, now = new Date()) {
+  const current = await userFromToken(token);
+  const result = await prisma.$transaction(async (tx) => {
+    await consumeReauthToken(tx, secret(), reauthToken, current.id, 'customer', now);
+    const user = await tx.user.findUniqueOrThrow({ where: { id: current.id } });
+    if (isDeletionRequested(user)) throw new Error('Sign in again.');
+    const inVisit = await tx.booking.count({
+      where: { userId: user.id, status: { in: [...CUSTOMER_IN_VISIT_STATUSES] } }
+    });
+    if (inVisit) throw new AppError('Finish your current visit first.', 409, 'VISIT_IN_PROGRESS');
+    const upcoming = await tx.booking.findMany({
+      where: { userId: user.id, status: { in: [...CUSTOMER_CANCEL_ON_DELETE_STATUSES] } },
+      include: { payment: true }
+    });
+    const refunded: string[] = [];
+    for (const booking of upcoming) {
+      const changed = await tx.booking.updateMany({
+        where: { id: booking.id, status: booking.status },
+        data: { status: 'CANCELLED', idempotencyKey: archivedIdempotencyKey(booking.id) }
+      });
+      if (changed.count !== 1) throw new AppError('Your bookings changed. Try again.', 409, 'BOOKINGS_CHANGED');
+      const refund = booking.status === 'AWAITING_SHOP' || cancelPolicy(booking.startsAt, now).refundAdvance;
+      if (refund && booking.payment && booking.payment.status !== 'REFUNDED') {
+        await tx.bookingPayment.update({ where: { bookingId: booking.id }, data: { status: 'REFUNDED' } });
+        refunded.push(booking.id);
+      }
     }
-    await tx.review.deleteMany({ where: { userId: user.id } });
+    await tx.user.update({
+      where: { id: user.id },
+      data: { deletionRequestedAt: now, tokenVersion: { increment: 1 }, pushToken: null }
+    });
     await tx.bookingHold.deleteMany({ where: { userId: user.id } });
-    await tx.notification.deleteMany({ where: { userId: user.id } });
-    await tx.favouriteShop.deleteMany({ where: { userId: user.id } });
-    await tx.savedLocation.deleteMany({ where: { userId: user.id } });
     if (user.phone) await tx.phoneOtp.deleteMany({ where: { phone: user.phone } });
-    await tx.user.delete({ where: { id: user.id } });
+    return { upcoming, refunded };
   });
-  return { deleted: true as const };
+  for (const booking of result.upcoming) {
+    void notifyShopPartner(booking.shopId, {
+      title: 'Customer cancelled',
+      body: `${booking.bookingCode} · account closed`,
+      data: { bookingId: booking.id, screen: 'requests' }
+    });
+  }
+  return {
+    deleted: true as const,
+    deletionRequestedAt: now.toISOString(),
+    restoreBefore: deletionDeadline(now).toISOString(),
+    cancelledBookings: result.upcoming.length,
+    refundedBookingIds: result.refunded
+  };
 }

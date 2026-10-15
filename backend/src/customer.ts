@@ -22,6 +22,8 @@ import {
 } from './hours';
 import { assertDateKeyIST, addDaysKeyIST, dayRangeIST, formatIST, todayKeyIST } from './ist';
 import { userFromToken } from './auth';
+import { displayReviewerName } from './accountDeletion';
+import { AppError } from './httpError';
 import { notifyShopPartner, notifyUser } from './push';
 import { SLOT_TAKEN_MESSAGE, throwIfSlotRace } from './race';
 import { barberRatingFromReviews, resolveListService, shopRatingFromReviews } from './shopList';
@@ -219,7 +221,7 @@ export async function listNearbyShops(input: {
   const rows = await prisma.shop.findMany({
     where: {
       setupDone: true,
-      isActive: true,
+      status: 'ACTIVE',
       ...(kindSet.length
         ? {
             OR: [
@@ -307,15 +309,25 @@ export async function shopHours(id: string) {
   return getPublicShopHours(prisma, id);
 }
 
+/** T3-Q9: a CLOSED or purged shop answers 410 SHOP_CLOSED (deep links, favourites). */
+export const SHOP_CLOSED = () => new AppError('This shop is no longer taking bookings.', 410, 'SHOP_CLOSED');
+
+async function throwShopMissing(id: string): Promise<never> {
+  const row = await prisma.shop.findUnique({ where: { id }, select: { status: true, deletedAt: true } });
+  if (row && (row.status === 'CLOSED' || row.deletedAt)) throw SHOP_CLOSED();
+  throw new Error('Shop not found.');
+}
+
 export async function getShop(id: string, origin?: { lat: number; lng: number }) {
   const shop = await prisma.shop.findFirst({
-    where: { id, setupDone: true, isActive: true },
+    where: { id, setupDone: true, status: 'ACTIVE' },
     include: {
       images: { orderBy: { sortOrder: 'asc' }, take: 8 },
       services: { include: { service: true } },
       reviews: { select: { rating: true } }
     }
   });
+  if (!shop) await throwShopMissing(id);
   if (!shop) throw new Error('Shop not found.');
   const openById = await loadOpenStatusForShops(prisma, [shop.id]);
   const resolved = resolveListService(shop.services);
@@ -375,14 +387,14 @@ export async function shopBarbers(shopId: string) {
 }
 
 export async function listShopReviews(shopId: string) {
-  const shop = await prisma.shop.findFirst({ where: { id: shopId, setupDone: true, isActive: true } });
-  if (!shop) throw new Error('Shop not found.');
+  const shop = await prisma.shop.findFirst({ where: { id: shopId, setupDone: true, status: 'ACTIVE' } });
+  if (!shop) await throwShopMissing(shopId);
   const rows = await prisma.review.findMany({
     where: { shopId },
     orderBy: { createdAt: 'desc' },
     take: 40,
     include: {
-      user: { select: { name: true } },
+      user: { select: { name: true, deletionRequestedAt: true, deletedAt: true } },
       barber: { select: { id: true, name: true } }
     }
   });
@@ -392,7 +404,7 @@ export async function listShopReviews(shopId: string) {
     barberRating: row.barberRating,
     text: row.text,
     createdAt: row.createdAt.toISOString(),
-    customerName: (row.user.name || 'Guest').split(/\s+/)[0] || 'Guest',
+    customerName: displayReviewerName(row.user),
     barber: { id: row.barber.id, name: row.barber.name }
   }));
 }
@@ -617,7 +629,7 @@ export async function shopAvailability(input: {
   excludeUserId?: string;
 }) {
   const shop = await prisma.shop.findFirst({
-    where: { id: input.shopId, setupDone: true, isActive: true },
+    where: { id: input.shopId, setupDone: true, status: 'ACTIVE' },
     select: { acceptingAppointments: true, acceptingPausedUntil: true }
   });
   if (!shop) throw new Error('Shop not found.');
@@ -788,7 +800,7 @@ export async function createHold(
   }
   const serviceIds = normalizeServiceIds(input);
   const accepting = await prisma.shop.findFirst({
-    where: { id: input.shopId, setupDone: true, isActive: true },
+    where: { id: input.shopId, setupDone: true, status: 'ACTIVE' },
     select: { acceptingAppointments: true, acceptingPausedUntil: true }
   });
   if (!accepting) throw new Error('Shop not found.');
@@ -965,7 +977,7 @@ export async function createBooking(token: string, input: {
   if (!input.holdId?.trim()) throw new Error('Hold this slot again before paying.');
   const serviceIds = normalizeServiceIds(input);
   const accepting = await prisma.shop.findFirst({
-    where: { id: input.shopId, setupDone: true, isActive: true },
+    where: { id: input.shopId, setupDone: true, status: 'ACTIVE' },
     select: { acceptingAppointments: true, acceptingPausedUntil: true }
   });
   if (!accepting) throw new Error('Shop not found.');
@@ -1786,7 +1798,7 @@ export async function listFavouriteShops(token: string, origin?: { lat?: number;
   });
   const lat = origin?.lat ?? 23.2324;
   const lng = origin?.lng ?? 87.8615;
-  const shops = rows.map((row) => row.shop).filter((shop) => shop.setupDone && shop.isActive);
+  const shops = rows.map((row) => row.shop).filter((shop) => shop.setupDone && shop.status === 'ACTIVE');
   const openById = await loadOpenStatusForShops(
     prisma,
     shops.map((shop) => shop.id)
@@ -1807,7 +1819,7 @@ export async function listFavouriteShops(token: string, origin?: { lat?: number;
 
 export async function setFavouriteShop(token: string, shopId: string, favourite: boolean) {
   const user = await userFromToken(token);
-  const shop = await prisma.shop.findFirst({ where: { id: shopId, setupDone: true, isActive: true } });
+  const shop = await prisma.shop.findFirst({ where: { id: shopId, setupDone: true, status: 'ACTIVE' } });
   if (!shop) throw new Error('Shop not found.');
   if (favourite) {
     await prisma.favouriteShop.upsert({

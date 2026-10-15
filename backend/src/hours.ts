@@ -207,7 +207,7 @@ export function assertSlotAllowedByAccepting(
 /** Public weekly hours for a shop (missing weekday = closed). Seeds defaults if empty. */
 export async function getPublicShopHours(prisma: PrismaClient, shopId: string) {
   const shop = await prisma.shop.findFirst({
-    where: { id: shopId, isActive: true },
+    where: { id: shopId, status: 'ACTIVE' },
     select: { id: true, name: true }
   });
   if (!shop) throw new Error('Shop not found.');
