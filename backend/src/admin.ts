@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { signToken } from './auth';
 import { partnerSignUp } from './partner';
 import { clientKey, rateLimit } from './rateLimit';
+import { hasCloudflareHeaders, isLoopback, normalizeIp, socketIp } from './clientIp';
 
 const prisma = new PrismaClient();
 
@@ -23,22 +24,18 @@ function safeEqualString(a: string, b: string): boolean {
   return equal && ab.length === bb.length;
 }
 
+/** @deprecated T2: kept for callers; uses the normalised raw socket check. */
 export function isLoopbackIp(ip: string | undefined): boolean {
-  if (!ip) return false;
-  const v = ip.trim().toLowerCase();
-  return (
-    v === '127.0.0.1' ||
-    v === '::1' ||
-    v === '::ffff:127.0.0.1' ||
-    v.startsWith('127.')
-  );
+  return isLoopback(normalizeIp(ip ?? null));
 }
 
 /**
  * Ops admin gate:
  * - Strong unique `ADMIN_SECRET` (rejects empty + known weak defaults)
- * - Loopback only (admin UI → http://127.0.0.1:4000). Public tunnel cannot hit /api/admin/*.
- * - Optional escape hatch: `ADMIN_ALLOW_REMOTE=1` (not recommended)
+ * - Served only by the admin listener on 127.0.0.1:4001 (T2); :4000 answers 404.
+ * - Raw socket peer must be loopback (never req.ip / headers).
+ * - Requests carrying Cloudflare headers are refused (403): cloudflared also connects from loopback.
+ * - ADMIN_ALLOW_REMOTE was removed (T2); remote admin only via a future Cloudflare Access setup.
  */
 export function assertAdmin(req: Request) {
   const expected = process.env.ADMIN_SECRET?.trim() || '';
@@ -55,8 +52,12 @@ export function assertAdmin(req: Request) {
     throw err;
   }
 
-  const allowRemote = process.env.ADMIN_ALLOW_REMOTE === '1';
-  if (!allowRemote && !isLoopbackIp(req.ip)) {
+  if (hasCloudflareHeaders(req)) {
+    const err = new Error('Forbidden.') as Error & { status?: number };
+    err.status = 403;
+    throw err;
+  }
+  if (!isLoopback(socketIp(req))) {
     const err = new Error('Unauthorized.') as Error & { status?: number };
     err.status = 401;
     throw err;
@@ -101,7 +102,7 @@ export function runAdmin(req: Request, res: Response, action: () => Promise<unkn
         }
       }
       const message =
-        status === 401 || status === 503
+        status === 401 || status === 403 || status === 503
           ? error instanceof Error
             ? error.message
             : 'Unauthorized.'

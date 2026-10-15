@@ -5,7 +5,7 @@
 | Layer | Choice |
 | --- | --- |
 | App | Expo Router ~57, React Native 0.86, React 19, Reanimated 4, TanStack Query |
-| API | Express on `0.0.0.0:$PORT` (default **4000**), `tsx watch` |
+| API | Express on `$HOST:$PORT` (default **127.0.0.1:4000**; `HOST=0.0.0.0` only with `NODE_ENV=development`), admin on **127.0.0.1:4001**, `tsx watch` |
 | DB | Postgres · Prisma 6 · migrations under `prisma/migrations/` · **local Postgres.app preferred for daily dev**; Neon Free (us-east-2) optional / slow from India |
 | Auth | JWT (`JWT_SECRET`), bcrypt passwords, Twilio OTP hooks, Google ID token |
 | Push | `expo-notifications` + **Firebase FCM** (`cutly-buzz`). Client: `google-services.json` via `android.googleServicesFile`. Server send: Expo Push API with EAS FCM V1 key (`cutly-fcm@…`). Channels `visits_v2` / `shop_requests_v2`. EAS project `@zeus-pr/cutly`. Partner Home also local-alerts on poll. |
@@ -58,7 +58,7 @@ Dev hosts:
 | --- | --- |
 | Auth | `/auth/signup`, `/login`, `/google`, `/otp/*`, `/me`, `/profile` (name/email/gender/`dateOfBirth`/inviteCode). Google stores or links an email only when the token has `email_verified === true` and the CUTLY row’s `emailVerified` is already true (SEC-03). A passwordless unverified row holding that address loses it in the same transaction. A password account keeps its login email. Google sign-in asks them to use that password, then Profile → Link Google sends the session token and attaches `googleSub` when the emails match. Password sign-in matches the address ignoring case. Signup stores the email in lowercase. Signup and profile edits leave `emailVerified` false. A unique-email clash on the first Google create is looked up once more. App refreshes `/auth/me` on launch. A 401 drops the saved login and returns to phone sign-in so the next OTP loads that number’s profile. |
 | Partner | `/partner/signup` **403** (admin-only onboard). `/login` (rate-limited), `/shop` POST (setup) + **`PATCH /partner/shop`** (profile, no menu wipe), `PATCH /partner/shop/phone`, `/floor`, `/barbers` PATCH, `/amenities`, `GET|PUT /partner/hours`, `PATCH /partner/accepting`, `PUT /partner/services`, `/photos`, `/dashboard`, `/requests`, `/history`, booking respond/start/status, walk-ins, push, account DELETE |
-| Admin (ops) | Header `x-admin-secret: $ADMIN_SECRET` (≥24 chars, rejects weak defaults). **`/api/admin/*` loopback-only** (`req.ip` 127.0.0.1 / ::1) + rate limit; escape hatch `ADMIN_ALLOW_REMOTE=1` only if needed. UI: `admin/` → `http://127.0.0.1:4000`. Keep-alive: `scripts/cutly-api.sh` / LaunchAgent. |
+| Admin (ops) | Header `x-admin-secret: $ADMIN_SECRET` (≥24 chars, rejects weak defaults). **`/api/admin/*` only on the 127.0.0.1:4001 listener** (raw socket must be loopback, Cloudflare headers → 403, :4000 returns 404) + rate limit. UI: `admin/` → `http://127.0.0.1:4001`. Keep-alive: `scripts/cutly-api.sh` / LaunchAgent. |
 | Customer shops | `/shops?lat&lng&radiusKm&query&serviceName&openNow&kinds&serviceHints`, `/shops/:id`, `/services`, `/hours` (weekly), `/barbers`, `/reviews`, `/availability`. Shop cards include `kind`/`kinds`, open chips, ratings. |
 | Partner setup | `POST /partner/shop` accepts `kinds[]` (multi) + optional `kind` primary + `productBrands[]` |
 | Public leads | `POST /api/public/partner-leads` → `PartnerLead` + Resend (`PARTNER_LEAD_TO`). Marketing: **Cloudflare Pages** `cutly-www` → **`www.cutly.buzz`** + **`cutly.buzz`** (`npm run site:deploy`; Mac-independent). Tunnel = `api.cutly.buzz` only (Mac-on). `/partner-with-us` → `PARTNER_SITE_URL` |
@@ -67,7 +67,7 @@ Dev hosts:
 | Push | `POST /push/register` (customer), `POST /partner/push/register` (shop) |
 | Inbox | `GET /notifications`, `POST /notifications/:id/read`, `POST /notifications/read-all` — rows from `Notification` (persisted on every `notifyUser`, even without push token); optional JSON `data` for deep links / future coupons |
 | Favourites | `GET /favourites`, `GET|POST|DELETE /favourites/:shopId` |
-| Auth harden | CORS allowlist (`CORS_ORIGINS`); rate limit login / Google / OTP / partner-login / signup / hold / book / pay / admin. Buckets: Redis `INCR` + jittered `PEXPIRE` when `REDIS_URL` is set (window + 0–10%, max +60s); in-memory with the same jitter if Redis is unset or down for 30s. `clientKey` uses `req.ip` only (no spoofable XFF). Customer JWT requires `aud===customer`; partner verify uses `jwtSecret()` + HS256. API `handle()` → `toClientError` (no secret/Prisma leaks). |
+| Auth harden | CORS allowlist (`CORS_ORIGINS`); rate limit login / Google / OTP / partner-login / signup / hold / book / pay / admin. Buckets: Redis `INCR` + jittered `PEXPIRE` when `REDIS_URL` is set (window + 0–10%, max +60s); in-memory with the same jitter if Redis is unset or down for 30s. `clientKey` uses `getClientIp` (CF-Connecting-IP only from a `TRUSTED_PROXY_CIDRS` socket, never XFF; IPv6 bucketed by /64). Customer JWT requires `aud===customer`; partner verify uses `jwtSecret()` + HS256. API `handle()` → `toClientError` (no secret/Prisma leaks). |
 
 ## Domain rules
 

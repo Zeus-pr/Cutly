@@ -1,0 +1,88 @@
+import type { AddressInfo } from 'node:net';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+process.env.ADMIN_SECRET = 'a'.repeat(12) + 'strong-admin-secret-xyz';
+process.env.JWT_SECRET = 'test';
+
+let api = '';
+let admin = '';
+const servers: import('node:http').Server[] = [];
+
+beforeAll(async () => {
+  const { app, adminApp } = await import('../backend/src/server');
+  for (const [a, set] of [
+    [app, (u: string) => (api = u)],
+    [adminApp, (u: string) => (admin = u)]
+  ] as const) {
+    const s = a.listen(0, '127.0.0.1');
+    await new Promise((r) => s.once('listening', r));
+    servers.push(s);
+    set(`http://127.0.0.1:${(s.address() as AddressInfo).port}`);
+  }
+});
+afterAll(() => servers.forEach((s) => s.close()));
+
+const secret = () => ({ 'x-admin-secret': process.env.ADMIN_SECRET! });
+
+describe(':4000 public listener', () => {
+  it('/api/admin/* is byte-identical to an unknown route 404', async () => {
+    const unknown = await fetch(`${api}/api/nope`);
+    const unknownBody = await unknown.text();
+    for (const p of ['/api/admin/ping', '/API/Admin/ping', '/api//admin/ping', '/api/admin/', '/api/admin']) {
+      const res = await fetch(`${api}${p}`, { headers: secret() });
+      expect(res.status).toBe(404);
+      expect(await res.text()).toBe(unknownBody);
+      expect(res.headers.get('content-type')).toBe(unknown.headers.get('content-type'));
+    }
+  });
+  it('Tester case 20: /api/admin/* 404 headers match an unknown route (Vary, ACAO) across methods and origins', async () => {
+    const pick = (r: Response) => {
+      const h: Record<string, string> = {};
+      r.headers.forEach((v, k) => { if (!['date', 'etag', 'content-length', 'connection', 'keep-alive', 'x-request-id'].includes(k)) h[k] = v; });
+      return { status: r.status, h, len: r.headers.get('content-length') };
+    };
+    for (const origin of [undefined, 'https://cutly.buzz', 'https://evil.example']) {
+      for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']) {
+        const headers: Record<string, string> = { ...secret(), 'content-type': 'application/json' };
+        if (origin) headers.origin = origin;
+        if (method === 'OPTIONS') headers['access-control-request-method'] = 'POST';
+        const body = ['GET', 'OPTIONS'].includes(method) ? undefined : '{}';
+        const u = await fetch(`${api}/api/nope`, { method, headers, body });
+        const a = await fetch(`${api}/api/admin/ping`, { method, headers, body });
+        expect(pick(a), `${method} ${origin}`).toEqual(pick(u));
+        expect(await a.text()).toBe(await u.text());
+        if (origin === 'https://cutly.buzz') expect(a.headers.get('access-control-allow-origin')).toBe(origin);
+        if (origin === 'https://cutly.buzz' && method !== 'OPTIONS') expect(a.headers.get('vary')).toMatch(/Origin/);
+      }
+    }
+  });
+
+  it('XFF 127.0.0.1 does not open admin', async () => {
+    const res = await fetch(`${api}/api/admin/ping`, { headers: { ...secret(), 'x-forwarded-for': '127.0.0.1' } });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe(':4001 admin listener', () => {
+  it('requires x-admin-secret (401)', async () => {
+    expect((await fetch(`${admin}/api/admin/ping`)).status).toBe(401);
+    expect((await fetch(`${admin}/api/admin/ping`, { headers: { 'x-admin-secret': 'wrong' } })).status).toBe(401);
+  });
+  it('Cloudflare headers → 403', async () => {
+    const res = await fetch(`${admin}/api/admin/ping`, { headers: { ...secret(), 'cf-ray': 'abc', 'cf-connecting-ip': '1.2.3.4' } });
+    expect(res.status).toBe(403);
+  });
+  it('/health is unauthenticated and never trips the admin failed-login limit', async () => {
+    for (let i = 0; i < 40; i++) {
+      const res = await fetch(`${admin}/health`);
+      expect(res.status).toBe(200);
+    }
+    // 20 failed unlocks are allowed per 15 min; health checks must not have used any of them.
+    const res = await fetch(`${admin}/api/admin/ping`, { headers: secret() });
+    expect(res.status).not.toBe(429);
+    expect((await fetch(`${admin}/api/admin/ping`)).status).toBe(401);
+  });
+  it('non-admin routes → 404', async () => {
+    expect((await fetch(`${admin}/api/shops`)).status).toBe(404);
+  });
+});

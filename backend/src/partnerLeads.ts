@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { sendPartnerLeadEmail } from './mail';
 
@@ -23,9 +23,14 @@ export function normalizeIndiaPhone(raw: string): string | null {
   return `+91${local}`;
 }
 
-function hashIp(ip: string | null | undefined) {
-  if (!ip) return null;
-  return createHash('sha256').update(ip).digest('hex').slice(0, 32);
+/** T2: keyed HMAC-SHA256 (IP_HASH_KEY, falling back to PHONE_HASH_KEY), 32 hex. Old rows keep unkeyed hashes. */
+export function hashIp(ip: string | null | undefined, key = process.env.IP_HASH_KEY || process.env.PHONE_HASH_KEY || '') {
+  if (!ip || ip === 'unknown') return null;
+  if (!key) {
+    console.warn('[leads] IP_HASH_KEY not set; storing no ip hash');
+    return null;
+  }
+  return createHmac('sha256', key).update(ip).digest('hex').slice(0, 32);
 }
 
 export async function createPartnerLead(input: PartnerLeadInput) {

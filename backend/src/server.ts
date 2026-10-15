@@ -1,4 +1,4 @@
-// Tests import this module without a .env file; the real entry is backend/src/main.ts.
+// Tests import this module without a .env file; the process entry is backend/src/main.ts.
 try {
   process.loadEnvFile();
 } catch {
@@ -98,8 +98,21 @@ import {
 } from './notifications';
 import { clientKey, rateLimit } from './rateLimit';
 import { clientErrorBody, toClientError } from './httpError';
+import { getClientIp, isLoopback, socketIp } from './clientIp';
 export const app = express();
-app.set('trust proxy', 1);
+// T2: never derive req.ip from X-Forwarded-For. Use getClientIp(req) instead.
+app.set('trust proxy', false);
+app.disable('x-powered-by');
+
+/** One 404 for unknown routes and for /api/admin/* on the public listener (byte-identical). */
+function notFound(_req: express.Request, res: express.Response) {
+  res.status(404).json({ error: 'Not found.' });
+}
+/** Case-insensitive, slash-normalised match for /api/admin and below. */
+export function isAdminPath(rawPath: string) {
+  const p = rawPath.toLowerCase().replace(/\/{2,}/g, '/');
+  return /^\/api\/admin(\/|$)/.test(p);
+}
 const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:8081,http://127.0.0.1:8081,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,https://cutly.buzz,https://www.cutly.buzz')
   .split(',')
   .map((s) => s.trim())
@@ -116,6 +129,9 @@ app.use(
     }
   })
 );
+// T2-Q6: after CORS (so headers match any unknown route, Tester case 20) but before body
+// parsing and auth, so :4000 reveals nothing about admin.
+app.use((req, res, next) => (isAdminPath(req.path) ? notFound(req, res) : next()));
 app.use(express.json({ limit: '8mb' }));
 app.get('/health', (_req, res) =>
   res.json({
@@ -782,12 +798,10 @@ app.post('/api/bookings/hold', async (req, res) => {
 
 /**
  * Ops admin (SEC-01/05): loopback-only + strong ADMIN_SECRET + rate limit.
- * Admin UI talks to http://127.0.0.1:4000 — not the public tunnel.
- * Routes live on `adminRouter`, mounted on `app` (unchanged behaviour) and on the
- * standalone `adminApp` so tests can hit admin without a listener. T2 (#7) moves admin
- * to its own 127.0.0.1:4001 listener and drops the mount on `app`.
+ * T2: served only by `adminApp` on 127.0.0.1:4001 (ADMIN_PORT). The tunnel points at :4000,
+ * where /api/admin/* is a plain 404.
  */
-export const adminRouter = express.Router();
+const adminRouter = express.Router();
 adminRouter.get('/api/admin/ping', (req, res) => runAdmin(req, res, () => adminPing()));
 adminRouter.get('/api/admin/partners', (req, res) => runAdmin(req, res, () => adminListPartners()));
 adminRouter.post('/api/admin/partners', (req, res) => {
@@ -867,10 +881,30 @@ adminRouter.delete('/api/admin/catalogue/services/:id', (req, res) =>
   runAdmin(req, res, () => adminRemoveCatalogueService(String(req.params.id)))
 );
 
-app.use(adminRouter);
 export const adminApp = express();
-adminApp.use(express.json({ limit: '1mb' }));
+adminApp.set('trust proxy', false);
+adminApp.disable('x-powered-by');
+// Defence in depth: the admin listener only ever serves loopback peers.
+adminApp.use((req, res, next) => {
+  if (!isLoopback(socketIp(req))) {
+    res.status(401).json({ error: 'Unauthorized.' });
+    return;
+  }
+  next();
+});
+// Unauthenticated liveness for scripts/cutly-api.sh. Never touches the admin rate limits.
+adminApp.get('/health', (_req, res) => res.json({ status: 'ok', service: 'cutly-admin' }));
+adminApp.use((req, res, next) => (isAdminPath(req.path) ? next() : notFound(req, res)));
+adminApp.use(
+  cors({
+    origin(origin, callback) {
+      callback(null, !origin || corsOrigins.includes(origin));
+    }
+  })
+);
+adminApp.use(express.json({ limit: '2mb' }));
 adminApp.use(adminRouter);
+adminApp.use(notFound);
 
 /** Public Partner With Us lead — no auth. */
 app.post('/api/public/partner-leads', async (req, res) => {
@@ -892,7 +926,10 @@ app.post('/api/public/partner-leads', async (req, res) => {
     createPartnerLead({
       ...parsed.data,
       userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
-      ip: req.ip || null
+      ip: (() => {
+        const ip = getClientIp(req);
+        return ip === 'unknown' ? null : ip;
+      })()
     })
   );
 });
@@ -952,6 +989,8 @@ app.use((req, res, next) => {
   });
 });
 
+app.use(notFound);
+
 // No listen() here: importing this module must not start servers (Tester).
-// Process entry (listen + background sweeps): backend/src/main.ts.
+// Process entry (listeners + sweeps): backend/src/main.ts.
 export default app;

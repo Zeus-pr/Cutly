@@ -5,7 +5,7 @@ const PARTNER_ID_KEY = 'cutly.adminPartnerId';
 /** Hit API directly (not Vite proxy) — survives proxy 500 when API briefly restarts. */
 const API_BASE =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE) ||
-  'http://127.0.0.1:4000/api';
+  'http://127.0.0.1:4001/api';
 
 export function getAdminSecret() {
   return sessionStorage.getItem(SECRET_KEY) || '';
@@ -68,7 +68,7 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = 5): Pro
   }
   throw lastErr instanceof Error
     ? lastErr
-    : new Error('Cannot reach CUTLY API on :4000. Run: npm run api:ensure');
+    : new Error('Cannot reach CUTLY admin API on 127.0.0.1:4001. Run: npm run api:ensure');
 }
 
 /** Admin routes — `x-admin-secret` only. */
