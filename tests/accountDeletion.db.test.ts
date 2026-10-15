@@ -154,9 +154,13 @@ suite('T3 delete account (database)', () => {
     // Idempotent re-run; and the phone can sign up again as a new account.
     const again = await runAccountPurge();
     expect(again.users).toBe(0);
+    // T4 (#9): signup is two-step now; the purged phone/email can start a new one (202 + pendingId).
+    process.env.EMAIL_CODE_KEY = 'test-email-code-key-0123456789abcdef';
+    process.env.EMAIL_HASH_KEY = 'test-email-hash-key-0123456789abcdef';
+    process.env.EMAIL_TRANSPORT = 'log';
     const fresh = await call('POST', '/api/auth/signup', { body: { email: `${tag}@example.com`, password: 'password123', phone } });
-    expect(fresh.status).toBe(200);
-    expect(fresh.body.data.user.id).not.toBe(user.id);
+    expect(fresh.status).toBe(202);
+    expect(fresh.body.data.pendingId).toBeTruthy();
   });
 
   it('customer: visit in progress → 409', async () => {
@@ -600,7 +604,7 @@ suite('T3 delete account (database)', () => {
   it('DBA #10 (guard): reclaim refuses a row that became pending/purged after the plan; plain rows still clear', async () => {
     const { clearReclaimedEmail, GoogleLinkRetry } = await import('../backend/src/auth');
     for (const data of [{ deletionRequestedAt: new Date() }, { deletedAt: new Date() }]) {
-      const email = `${tag}-g10b-${Object.keys(data)[0]}@example.com`;
+      const email = `${tag}-g10b-${Object.keys(data)[0]}@example.com`.toLowerCase();
       const row = await prisma.user.create({ data: { email, emailVerified: false, ...data } });
       await expect(prisma.$transaction((tx) => clearReclaimedEmail(tx, row.id, email))).rejects.toBeInstanceOf(GoogleLinkRetry);
       expect((await prisma.user.findUniqueOrThrow({ where: { id: row.id } })).email).toBe(email);

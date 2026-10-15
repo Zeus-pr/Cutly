@@ -39,6 +39,11 @@ export default function NotificationsScreen() {
         // still navigate
       }
     }
+    // T4 (#9) screen 13 → 14: an email released to its owner opens Profile.
+    if (item.type === 'email_released' || item.type === 'email_changed' || item.data?.screen === 'profile') {
+      router.push('/(tabs)/profile');
+      return;
+    }
     const bookingId = item.data?.bookingId;
     if (bookingId) {
       router.push({ pathname: '/booking/[id]', params: { id: bookingId } });

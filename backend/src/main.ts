@@ -8,6 +8,7 @@ import { adminApp, app } from './server';
 import { paymentsEnabled } from './razorpay';
 import { startAwaitingExpirySweep } from './awaitingExpiry';
 import { startAccountPurgeSweep } from './accountPurge';
+import { startEmailCleanupSweep } from './emailCleanup';
 import { phoneHashKey } from './accountDeletion';
 import { resolveListenConfig } from './listenConfig';
 
@@ -44,5 +45,7 @@ const adminServer = adminApp.listen(cfg.adminPort, cfg.adminHost, () => {
   startAwaitingExpirySweep(60_000);
   // T3: anonymise accounts past the deletion grace window (single runner via advisory lock).
   startAccountPurgeSweep(60 * 60_000);
+  // T4 (#9): expired email codes / pending signups (own advisory lock, DBA item 5).
+  startEmailCleanupSweep(15 * 60_000);
 });
 listen(adminServer, `Admin ${cfg.adminHost}:${cfg.adminPort}`);

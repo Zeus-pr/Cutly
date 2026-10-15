@@ -36,7 +36,10 @@ Hooks: `useColors()`, `useThemedStyles(factory)`, `useThemeStore` (SecureStore `
 ## Customer auth
 
 - Launch: coral `#F06B55` + **CutLy.** (first frame of the Lottie, no tagline) → clip once → **CutLy.** and `HAIR | GROOMING | TATTOO | PIERCING | WELLNESS`. Unsigned: **Get Started** → customer auth. Signed-in: the clip only, then home (no end screen). Home promo still uses PatternWaves.
-- Flow: **phone** (+91) → CodeSlots OTP → **complete-profile** (full name, gender, native date of birth 13+, optional referral code) → location permission → home. Date of birth uses the system picker (Android dialog, iOS wheel). Same screen after email or Google when name, gender, or date of birth is missing. No email field on that screen. Secondary: email + Google. Auth footer (phone mode): **Become a partner** (opens `EXPO_PUBLIC_PARTNER_SITE_URL` / www) + **Already a partner** → partner sign-in.
+- Flow: **phone** (+91) → CodeSlots OTP → **complete-profile** (full name, gender, native date of birth 13+, optional referral code) → location permission → home. Date of birth uses the system picker (Android dialog, iOS wheel). Same screen after email or Google when name, gender, or date of birth is missing. No email field on that screen. Secondary: email + Google.
+- **Sign-in screen (T4 #9, phone mode):** white root (canvas in dark mode) with the 220 px coral glow top-left. Brand row: 64×64 coral logo (wordmark only, **no tagline**) + "Hair · Wellness · Tattoo · Piercing · And more" (medium 11 muted, max 150 wide); right, a decorative 4-photo collage (150×170, 20 px radii with one 4 px leaf corner, bleeds 8 px). Headline **Luxury / you deserve.** (bold 34/38, −0.6, left). Sub-copy (regular 14/20 muted). The sign-in cat Lottie (`assets/animations/signin-cat.json`, 112×80, decorative, static under Reduce Motion, paused on blur) sits on the phone row's top edge. Phone row is **+91 only, no country dropdown/chevron**; placeholder "Enter your mobile number". Continue → legal line (Terms of Service / Privacy Policy underlined links) → OR → method rows (mail / Google icon, label, chevron) → hairline + **FOR BUSINESS PARTNERS** → two half-width cards: **Become a partner** (sand) and **Partner sign in** (outline) → `/partner/auth`.
+- **Email sign-in** keeps **New here? Create an account** under the form → Create account (email, password with eye, +91 phone) → **Send code** → "Check your email" 6-digit CodeSlots (resend after 60 s, "New code sent" toast, 5 tries, 10 min expiry, hint after 2 resends) → **Email verified** (SuccessOverlay) → complete-profile. No account exists until the code is proved.
+- **Profile email:** unverified email shows a sand **Not verified** pill (danger text) and a dismissible (7 days) **Verify your email** banner (coral left edge, "Verify now" pill, 44 px close). **Change email lives in Edit profile** (Email row + Change/Add link) → re-auth (#46 methods) → new address → code → "Email updated". A released address (verified by its owner elsewhere) shows "No email added" + "Your email was removed" banner and an Alerts card that opens Profile.
 - Booking details: Timings | Get Directions equal half-row; Timings opens hours bottom sheet (timed slide up/down — no spring bounce).
 
 ## Partner setup / auth patterns
@@ -54,7 +57,7 @@ Hooks: `useColors()`, `useThemedStyles(factory)`, `useThemeStore` (SecureStore `
 
 ## Partner auth entry
 
-- No role gate. Partner path is two footer buttons under customer auth; partner screen is **sign-in only** (no create account).
+- No role gate. Partner path is two footer cards under customer auth (**Become a partner**, **Partner sign in**); partner screen is **sign-in only** (no create account).
 
 ## Customer surfaces
 

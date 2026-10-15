@@ -79,7 +79,7 @@ model User {
   inviteCode String?
   passwordHash String?
   googleSub String? @unique
-  /** True only after Google proves this address. Typed emails stay false (SEC-03). */
+  /** True only after Google or an emailed code (T4 #9) proves this address. Typed emails stay false (SEC-03). */
   emailVerified Boolean @default(false)
   pushToken String?
   /** T3: set when the owner asks to delete the account. Sign-in before + ACCOUNT_DELETION_GRACE_DAYS restores. */
@@ -419,7 +419,69 @@ model ReauthGrant {
   @@index([expiresAt])
 }
 
+/// T4 (#9): emailed 6-digit codes. One live row per (subject, purpose); a resend replaces it.
+/// Subject is a user (verify_existing / email_change) or a pending signup (signup_verify).
+model EmailCode {
+  id              String   @id @default(cuid())
+  userId          String?
+  pendingSignupId String?
+  /// lower(btrim(target address))
+  emailNorm       String
+  /// HMAC-SHA256(EMAIL_CODE_KEY, subject|purpose|email|code). The code itself is never stored.
+  codeHmac        String
+  /// 'signup_verify' | 'verify_existing' | 'email_change'
+  purpose         String
+  expiresAt       DateTime
+  attempts        Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([emailNorm, createdAt(sort: Desc)])
+  @@index([expiresAt])
+  @@index([userId, purpose])
+  @@index([pendingSignupId, purpose])
+}
+
+/// T4 (#9): an email signup waiting for its code. No User row exists until the code is proved.
+/// Several rows may share an address; the first verified wins (User.email is unique).
+model PendingSignup {
+  id           String   @id @default(cuid())
+  emailNorm    String
+  passwordHash String
+  phone        String
+  name         String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([expiresAt])
+  @@index([emailNorm])
+}
+
+/// T4 (#9): audit of an unverified address released to its proven owner. Kept 12 months.
+model EmailRelease {
+  id         String   @id @default(cuid())
+  /// HMAC-SHA256(EMAIL_HASH_KEY, address). The address itself is not stored.
+  emailHmac  String
+  fromUserId String
+  toUserId   String?
+  /// 'google_owner' | 'signup_verified' | 'email_change'
+  reason     String
+  createdAt  DateTime @default(now())
+
+  @@index([emailHmac])
+  @@index([createdAt])
+}
+
+/// T4 (#9): hard bounces and complaints from the Resend webhook. Kept 24 months. Soft bounces are not stored.
+model EmailSuppression {
+  id        String   @id @default(cuid())
+  emailHmac String   @unique
+  /// 'hard_bounce' | 'complaint'
+  reason    String
+  createdAt DateTime @default(now())
+}
+
 // Raw-SQL objects Prisma cannot express (drift notes; `prisma migrate diff` ignores them):
+// - User_email_lowercase_chk / Partner_email_lowercase_chk CHECK (email = lower(btrim(email))) (T4 #9)
 // - booking_barber_no_overlap / hold_barber_no_overlap EXCLUDE constraints (20261003154500)
 // - User_email_lower_idx expression index (20261014020000)
 // - T3 partial indexes: Shop_active_lat_lng_idx WHERE status = 'ACTIVE' (20261015000100),

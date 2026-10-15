@@ -100,6 +100,21 @@ import {
 import { clientKey, rateLimit, sendRateLimited } from './rateLimit';
 import { clientErrorBody, toClientError } from './httpError';
 import { getClientIp, isLoopback, socketIp } from './clientIp';
+import {
+  CHANGE_EMAIL_ACTION,
+  confirmEmailChange,
+  confirmVerifyExisting,
+  emailReleasedFlag,
+  pendingSignupEmail,
+  requestEmailChange,
+  resendEmailChange,
+  resendEmailSignup,
+  sendVerifyExisting,
+  startEmailSignup,
+  verifyEmailSignup
+} from './emailAuth';
+import { cleanCode, emailBucket, signupEmailVerifyOn } from './emailCode';
+import { recordResendEvent, verifySvixSignature } from './resendWebhook';
 export const app = express();
 // T2: never derive req.ip from X-Forwarded-For. Use getClientIp(req) instead.
 app.set('trust proxy', false);
@@ -133,6 +148,27 @@ app.use(
 // T2-Q6: after CORS (so headers match any unknown route, Tester case 20) but before body
 // parsing and auth, so :4000 reveals nothing about admin.
 app.use((req, res, next) => (isAdminPath(req.path) ? notFound(req, res) : next()));
+// T4 (#9): Resend webhook needs the raw body for the Svix signature, so it sits before express.json.
+app.post('/api/webhooks/resend', express.raw({ type: '*/*', limit: '256kb' }), async (req, res) => {
+  const limited = await rateLimit(clientKey(req, 'resend-webhook'), 120, 60_000);
+  if (!limited.ok) return sendRateLimited(res, limited, 'requests');
+  const secret = process.env.RESEND_WEBHOOK_SECRET?.trim() || '';
+  if (!secret) return res.status(503).json({ error: 'Webhook not configured.' });
+  const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+  const ok = verifySvixSignature(
+    secret,
+    { id: req.header('svix-id'), timestamp: req.header('svix-timestamp'), signature: req.header('svix-signature') },
+    raw
+  );
+  if (!ok) return res.status(401).json({ error: 'Bad signature.' });
+  let event: unknown;
+  try {
+    event = JSON.parse(raw);
+  } catch {
+    return res.status(400).json({ error: 'Bad body.' });
+  }
+  return handle(res, () => recordResendEvent(event as Parameters<typeof recordResendEvent>[0]));
+});
 app.use(express.json({ limit: '8mb' }));
 app.get('/health', (_req, res) =>
   res.json({
@@ -169,7 +205,114 @@ app.post('/api/auth/signup', async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: 'Use email, phone (+91…), and a password of at least 8 characters.' });
   }
-  return handle(res, () => signUp(parsed.data.email, parsed.data.password, parsed.data.phone, parsed.data.name));
+  // T4 (#9): two-step signup. SIGNUP_EMAIL_VERIFY=off keeps the old one-step session for old builds.
+  if (!signupEmailVerifyOn()) {
+    return handle(res, () => signUp(parsed.data.email, parsed.data.password, parsed.data.phone, parsed.data.name));
+  }
+  if (!(await emailSendLimited(req, res, parsed.data.email, null))) return;
+  return handleEmail(res, () => startEmailSignup(parsed.data), 202);
+});
+
+/**
+ * T4 (#9) §5 send limits: 10/IP per 15 min, 5/address per hour, 20/address per day,
+ * 5/subject (pending signup or session) per hour. The 60 s cooldown is checked in emailAuth.
+ * Returns false when a 429 was already sent.
+ */
+async function emailSendLimited(req: express.Request, res: express.Response, email: string | null, subject: string | null) {
+  const checks: [string, number, number][] = [[clientKey(req, 'email-send'), 10, 15 * 60_000]];
+  if (email) {
+    const bucket = emailBucket(email.trim().toLowerCase());
+    checks.push([`email-send-h:${bucket}`, 5, 60 * 60_000], [`email-send-d:${bucket}`, 20, 24 * 60 * 60_000]);
+  }
+  if (subject) checks.push([`email-send-s:${subject}`, 5, 60 * 60_000]);
+  for (const [key, limit, windowMs] of checks) {
+    const limited = await rateLimit(key, limit, windowMs);
+    if (!limited.ok) {
+      sendRateLimited(res, limited, 'codes requested');
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Verify limits: 20/IP per 15 min (as otp-verify) + 10/address-subject per hour; 5 per code in emailAuth. */
+async function emailVerifyLimited(req: express.Request, res: express.Response, subject: string) {
+  for (const [key, limit, windowMs] of [
+    [clientKey(req, 'email-verify'), 20, 15 * 60_000],
+    [`email-verify-s:${subject}`, 10, 60 * 60_000]
+  ] as [string, number, number][]) {
+    const limited = await rateLimit(key, limit, windowMs);
+    if (!limited.ok) {
+      sendRateLimited(res, limited, 'code checks');
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Like handle(), plus Retry-After on a RATE_LIMITED domain error and a custom success status. */
+async function handleEmail(res: express.Response, action: () => Promise<unknown>, okStatus = 200) {
+  try {
+    res.status(okStatus).json({ data: await action() });
+  } catch (error) {
+    const err = toClientError(error);
+    const retry = err.details?.retryAfterSec;
+    if (err.code === 'RATE_LIMITED' && typeof retry === 'number') res.setHeader('Retry-After', String(retry));
+    res.status(err.status).json(clientErrorBody(err));
+  }
+}
+
+const codeSchema = z.string().transform((v) => cleanCode(v)).refine((v): v is string => Boolean(v));
+
+app.post('/api/auth/signup/resend', async (req, res) => {
+  const parsed = z.object({ pendingId: z.string().min(10).max(40) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Start again from Create account.' });
+  const email = await pendingSignupEmail(parsed.data.pendingId);
+  if (!(await emailSendLimited(req, res, email, `pending:${parsed.data.pendingId}`))) return;
+  return handleEmail(res, () => resendEmailSignup(parsed.data.pendingId));
+});
+app.post('/api/auth/signup/verify', async (req, res) => {
+  const parsed = z.object({ pendingId: z.string().min(10).max(40), code: codeSchema }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Enter the 6-digit code.' });
+  const email = await pendingSignupEmail(parsed.data.pendingId);
+  if (!(await emailVerifyLimited(req, res, email ? emailBucket(email) : `pending:${parsed.data.pendingId}`))) return;
+  return handleEmail(res, () => verifyEmailSignup(parsed.data.pendingId, parsed.data.code));
+});
+app.post('/api/auth/email/verify/send', async (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  if (!(await emailSendLimited(req, res, null, `tok:${token.slice(-24)}`))) return;
+  return handleEmail(res, () => sendVerifyExisting(token));
+});
+app.post('/api/auth/email/verify', async (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  const parsed = z.object({ code: codeSchema }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Enter the 6-digit code.' });
+  if (!(await emailVerifyLimited(req, res, `tok:${token.slice(-24)}`))) return;
+  return handleEmail(res, () => confirmVerifyExisting(token, parsed.data.code));
+});
+app.post('/api/auth/email/change', async (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  const parsed = z.object({ newEmail: emailSchema }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email.' });
+  if (!(await emailSendLimited(req, res, parsed.data.newEmail, `tok:${token.slice(-24)}`))) return;
+  return handleEmail(res, () => requestEmailChange(token, req.header('x-reauth-token'), parsed.data.newEmail));
+});
+app.post('/api/auth/email/change/resend', async (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  if (!(await emailSendLimited(req, res, null, `tok:${token.slice(-24)}`))) return;
+  return handleEmail(res, () => resendEmailChange(token));
+});
+app.post('/api/auth/email/change/verify', async (req, res) => {
+  const token = bearer(req);
+  if (!token) return res.status(401).json({ error: 'Sign in again.' });
+  const parsed = z.object({ code: codeSchema }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Enter the 6-digit code.' });
+  if (!(await emailVerifyLimited(req, res, `tok:${token.slice(-24)}`))) return;
+  return handleEmail(res, () => confirmEmailChange(token, parsed.data.code));
 });
 app.post('/api/auth/login', async (req, res) => {
   const limited = await rateLimit(clientKey(req, 'login'), 20, 15 * 60_000);
@@ -241,7 +384,9 @@ app.post('/api/auth/reauth', async (req, res) => {
   if (left === null) return;
   const parsed = reauthSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Confirm with your password, an SMS code, or Google.', code: 'REAUTH_BAD_REQUEST' });
-  return handleReauth(res, left, () => startCustomerReauth(token, parsed.data));
+  // T4 (#9): optional `action` binds the grant (default delete_account, as before).
+  const action = req.body?.action === CHANGE_EMAIL_ACTION ? CHANGE_EMAIL_ACTION : 'delete_account';
+  return handleReauth(res, left, () => startCustomerReauth(token, parsed.data, undefined, action));
 });
 /**
  * #46: send the re-auth SMS to the signed-in account's own phone. Its own limit (5/session,
@@ -268,7 +413,11 @@ app.delete('/api/auth/account', async (req, res) => {
 app.get('/api/auth/me', (req, res) => {
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
-  return handle(res, () => userFromToken(token));
+  return handle(res, async () => {
+    const user = await userFromToken(token);
+    // T4 (#9) screen 14: the address was released to its proven owner.
+    return { ...user, emailReleased: await emailReleasedFlag(user.id, user.email) };
+  });
 });
 const kinds = ['BARBER', 'SALON', 'PARLOUR', 'SPA', 'NAILS', 'TATTOO', 'PIERCING'] as const;
 /** Public self-serve partner signup disabled (SEC-04). Onboard via Admin portal only. */

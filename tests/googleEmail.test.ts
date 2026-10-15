@@ -128,18 +128,37 @@ describe('planGoogleLink (SEC-03)', () => {
     });
   });
 
-  it('leaves a password account’s email in place', () => {
+  it('T4 (#9): an UNVERIFIED password account no longer blocks the verified Google owner (reclaim)', () => {
     expect(
       planGoogleLink({
         googleSub,
         trustedEmail,
         bySub: null,
-        byEmail: hit({ id: 'password', emailVerified: false, hasPassword: true })
+        byEmail: hit({ id: 'password', email: trustedEmail, emailVerified: false, hasPassword: true })
       })
-    ).toEqual({
-      kind: 'reject',
-      message: 'You already have a CUTLY account with this email. Sign in with your password, then link Google.'
-    });
+    ).toEqual({ kind: 'create', email: trustedEmail, reclaimFromUserId: 'password', reclaimEmail: trustedEmail });
+  });
+
+  it('T4 (#9) P4: a VERIFIED password account with the same email is auto-linked', () => {
+    expect(
+      planGoogleLink({
+        googleSub,
+        trustedEmail,
+        bySub: null,
+        byEmail: hit({ id: 'password', email: trustedEmail, emailVerified: true, hasPassword: true })
+      })
+    ).toMatchObject({ kind: 'link', userId: 'password', markEmailVerified: true, reclaimFromUserId: null });
+  });
+
+  it('T4 (#9): a VERIFIED account on another Google login still rejects', () => {
+    expect(
+      planGoogleLink({
+        googleSub,
+        trustedEmail,
+        bySub: null,
+        byEmail: hit({ id: 'v', email: trustedEmail, emailVerified: true, hasPassword: true, googleSub: 'someone-else' })
+      })
+    ).toMatchObject({ kind: 'reject' });
   });
 
   it('moves a typed email onto the new Google profile', () => {

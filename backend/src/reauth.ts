@@ -13,6 +13,8 @@ import { AppError } from './httpError';
 
 export const REAUTH_TTL_SEC = 300;
 export const REAUTH_ACTION = 'delete_account';
+/** T4 (#9): a grant is bound to one action; a delete grant can't change the email and vice versa. */
+export type ReauthAction = 'delete_account' | 'change_email';
 export type ReauthAudience = 'customer' | 'partner';
 
 export const REAUTH_REQUIRED = () => new AppError('Confirm it’s you first.', 401, 'REAUTH_REQUIRED');
@@ -83,7 +85,8 @@ export async function issueReauthToken(
   secret: string,
   subjectId: string,
   audience: ReauthAudience,
-  now = new Date()
+  now = new Date(),
+  action: ReauthAction = REAUTH_ACTION
 ) {
   const jti = randomUUID();
   await store.reauthGrant.create({
@@ -91,11 +94,11 @@ export async function issueReauthToken(
       id: jti,
       subjectId,
       audience,
-      action: REAUTH_ACTION,
+      action,
       expiresAt: new Date(now.getTime() + REAUTH_TTL_SEC * 1000)
     }
   });
-  const reauthToken = jwt.sign({ sub: subjectId, aud: 'reauth', who: audience, act: REAUTH_ACTION }, secret, {
+  const reauthToken = jwt.sign({ sub: subjectId, aud: 'reauth', who: audience, act: action }, secret, {
     algorithm: 'HS256',
     expiresIn: REAUTH_TTL_SEC,
     jwtid: jti
@@ -113,7 +116,8 @@ export async function consumeReauthToken(
   token: string | undefined | null,
   subjectId: string,
   audience: ReauthAudience,
-  now = new Date()
+  now = new Date(),
+  action: ReauthAction = REAUTH_ACTION
 ) {
   if (!token) throw REAUTH_REQUIRED();
   let payload: jwt.JwtPayload;
@@ -122,11 +126,11 @@ export async function consumeReauthToken(
   } catch {
     throw REAUTH_REQUIRED();
   }
-  if (payload.sub !== subjectId || payload.who !== audience || payload.act !== REAUTH_ACTION || !payload.jti) {
+  if (payload.sub !== subjectId || payload.who !== audience || payload.act !== action || !payload.jti) {
     throw REAUTH_REQUIRED();
   }
   const used = await store.reauthGrant.updateMany({
-    where: { id: payload.jti, subjectId, audience, action: REAUTH_ACTION, usedAt: null, expiresAt: { gt: now } },
+    where: { id: payload.jti, subjectId, audience, action, usedAt: null, expiresAt: { gt: now } },
     data: { usedAt: now }
   });
   if (used.count !== 1) throw REAUTH_REQUIRED();
