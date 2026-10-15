@@ -485,6 +485,15 @@ suite('T3 delete account (database)', () => {
     }
   }, 30_000);
 
+  it('sec LOW: DELETE /api/auth/account is rate limited per session', async () => {
+    const user = await prisma.user.create({ data: { phone: `+9185${String(Date.now()).slice(-8)}` } });
+    const token = signToken({ id: user.id, email: null, phone: user.phone, name: null }, 'customer', 0);
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) statuses.push((await call('DELETE', '/api/auth/account', { token, reauth: 'bogus' })).status);
+    expect(statuses.slice(0, 5).every((s) => s !== 429)).toBe(true);
+    expect(statuses[5]).toBe(429);
+  });
+
   it('DBA #10: Google sign-in never reclaims the email of a pending-deletion account', async () => {
     const { finishGoogleSignIn } = await import('../backend/src/auth');
     const email = `${tag}-g10@example.com`;

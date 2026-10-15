@@ -213,7 +213,13 @@ app.post('/api/auth/reauth', async (req, res) => {
   return handle(res, () => startCustomerReauth(token, parsed.data));
 });
 /** T3: soft delete; requires a one-time X-Reauth-Token from POST /api/auth/reauth. */
-app.delete('/api/auth/account', (req, res) => {
+app.delete('/api/auth/account', async (req, res) => {
+  // sec LOW: bound account-delete attempts (30/IP, 5/session per 15 min), same shape as reauth.
+  const byIp = await rateLimit(clientKey(req, 'account-delete'), 30, 15 * 60_000);
+  const limited = byIp.ok ? await rateLimit(`account-delete-tok:${bearer(req).slice(-24)}`, 5, 15 * 60_000) : byIp;
+  if (!limited.ok) {
+    return res.status(429).json({ error: `Too many attempts. Try again in ${limited.retryAfterSec}s.` });
+  }
   const token = bearer(req);
   if (!token) return res.status(401).json({ error: 'Sign in again.' });
   return handle(res, () => deleteCustomerAccount(token, req.header('x-reauth-token')));
