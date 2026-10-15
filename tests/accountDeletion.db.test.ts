@@ -515,6 +515,20 @@ suite('T3 delete account (database)', () => {
     expect(await prisma.user.count({ where: { googleSub: `sub-${tag}` } })).toBe(0);
   });
 
+  it('DBA #10 (guard): reclaim refuses a row that became pending/purged after the plan; plain rows still clear', async () => {
+    const { clearReclaimedEmail, GoogleLinkRetry } = await import('../backend/src/auth');
+    for (const data of [{ deletionRequestedAt: new Date() }, { deletedAt: new Date() }]) {
+      const email = `${tag}-g10b-${Object.keys(data)[0]}@example.com`;
+      const row = await prisma.user.create({ data: { email, emailVerified: false, ...data } });
+      await expect(prisma.$transaction((tx) => clearReclaimedEmail(tx, row.id, email))).rejects.toBeInstanceOf(GoogleLinkRetry);
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: row.id } })).email).toBe(email);
+    }
+    const email = `${tag}-g10b-live@example.com`;
+    const live = await prisma.user.create({ data: { email, emailVerified: false } });
+    await prisma.$transaction((tx) => clearReclaimedEmail(tx, live.id, email));
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: live.id } })).email).toBeNull();
+  });
+
   it('DBA #6: shop search bounding box keeps near shops and drops far ones', async () => {
     const near = await prisma.shop.create({ data: { name: 'near', address: 'a', city: 'c', latitude: 40.0, longitude: 10.0, setupDone: true } });
     const far = await prisma.shop.create({ data: { name: 'far', address: 'a', city: 'c', latitude: 41.0, longitude: 10.0, setupDone: true } });

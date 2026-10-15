@@ -454,6 +454,19 @@ async function linkGoogleToSignedIn(googleSub: string, email: string | null, nam
   return session(user);
 }
 
+/**
+ * Move a typed, unverified email off a password-less row so Google can claim it.
+ * DBA #10: never strips the email off an account that is pending deletion or purged (the row
+ * may have become pending after the plan was made); the caller then retries the lookup.
+ */
+export async function clearReclaimedEmail(tx: Prisma.TransactionClient, userId: string, email: string) {
+  const cleared = await tx.user.updateMany({
+    where: { id: userId, email, emailVerified: false, passwordHash: null, deletionRequestedAt: null, deletedAt: null },
+    data: { email: null, emailVerified: false }
+  });
+  if (cleared.count !== 1) throw new GoogleLinkRetry();
+}
+
 const GOOGLE_SIGN_IN_FAILED = 'Google sign-in failed. Try again.';
 
 /** Exported for tests (DBA #10). */
@@ -506,19 +519,7 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
   const user = await prisma.$transaction(async (tx) => {
     if (plan.reclaimFromUserId) {
       if (!plan.reclaimEmail) throw new GoogleLinkRetry();
-      const cleared = await tx.user.updateMany({
-        where: {
-          id: plan.reclaimFromUserId,
-          email: plan.reclaimEmail,
-          emailVerified: false,
-          passwordHash: null,
-          // DBA #10: never strip the email off an account that is pending deletion or purged.
-          deletionRequestedAt: null,
-          deletedAt: null
-        },
-        data: { email: null, emailVerified: false }
-      });
-      if (cleared.count !== 1) throw new GoogleLinkRetry();
+      await clearReclaimedEmail(tx, plan.reclaimFromUserId, plan.reclaimEmail);
     }
     if (plan.kind === 'create') {
       return tx.user.create({
