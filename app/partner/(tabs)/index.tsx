@@ -5,6 +5,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { CutlyWordmark } from '@/components/CutlyWordmark';
+import { PressScale } from '@/components/PressScale';
 import { PartnerDashboardSkeleton } from '@/components/Skeleton';
 import { radii, spacing, typography, type Palette } from '@/constants/theme';
 import {
@@ -156,9 +157,14 @@ export default function PartnerHome() {
               <Text style={styles.restoredTitle}>Welcome back. Your account is restored.</Text>
               <Text style={styles.restoredBody}>Your shop is paused. Turn bookings back on when you’re ready.</Text>
             </View>
-            <Pressable onPress={() => setRestoredNotice(null)} hitSlop={12} accessibilityRole="button" accessibilityLabel="Dismiss">
+            <PressScale
+              style={styles.restoredDismiss}
+              onPress={() => setRestoredNotice(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss"
+            >
               <Ionicons name="close" size={20} color={colors.muted} />
-            </Pressable>
+            </PressScale>
           </View>
         ) : null}
         <View style={styles.headerText}>
@@ -327,6 +333,7 @@ function homeStyles(colors: Palette) {
     restoredCopy: { flex: 1, gap: 2 },
     restoredTitle: { fontFamily: typography.display.fontFamily, fontSize: 15, color: colors.ink },
     restoredBody: { fontFamily: typography.body.fontFamily, fontSize: 14, lineHeight: 20, color: colors.muted },
+    restoredDismiss: { width: 44, height: 44, marginTop: -10, marginRight: -10, alignItems: 'center', justifyContent: 'center' },
     historyBtn: {
       flexDirection: 'row',
       alignItems: 'center',

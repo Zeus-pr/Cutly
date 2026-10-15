@@ -21,7 +21,7 @@ export default function AccountRestoredScreen() {
       <ScrollView contentContainerStyle={s.scroll}>
         <View style={s.form}>
           <View style={s.spacer} />
-          <Badge icon="refresh-outline" color={c.success} />
+          <Badge icon="arrow-undo-outline" color={c.accent} />
           <Title>Welcome back</Title>
           <Text style={s.lead}>Your account is restored, just as you left it.</Text>
           <View style={s.spacer} />

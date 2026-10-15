@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { CodeSlots } from '@/components/CodeSlots';
+import { PressScale } from '@/components/PressScale';
 import { ScreenBack } from '@/components/ScreenBack';
 import { SuccessOverlay } from '@/components/SuccessOverlay';
 import {
@@ -116,8 +117,8 @@ export default function DeleteAccountScreen() {
     [goRate, retryAt, sendCode]
   );
 
-  async function confirm(proof: ReauthProof) {
-    if (busyRef.current) return;
+  async function confirm(proof: ReauthProof, owned = false) {
+    if (busyRef.current && !owned) return;
     busyRef.current = true;
     setBusy(true);
     setError('');
@@ -176,13 +177,20 @@ export default function DeleteAccountScreen() {
   }
 
   async function google() {
+    // Guard before the native picker opens so a second tap can't start another signOut()+signIn().
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
     setError('');
     try {
       const idToken = await freshGoogleIdToken();
       if (!idToken) return; // cancelled: stay put, no error
-      await confirm({ googleIdToken: idToken });
+      await confirm({ googleIdToken: idToken }, true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Google sign-in needs a fresh Android build.');
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
     }
   }
 
@@ -236,13 +244,20 @@ export default function DeleteAccountScreen() {
         <BackRow onPress={() => setStep('confirm')} />
         <Title>Confirm it’s you</Title>
         <Text style={s.lead}>Enter the code sent to +91 {localPhone(phone)}</Text>
-        <View accessible accessibilityLabel="6-digit code">
-          <CodeSlots key={slotsKey} value={code} onChange={setCode} onComplete={(v) => void confirm({ code: v })} disabled={busy} />
-        </View>
+        <CodeSlots
+          key={slotsKey}
+          value={code}
+          onChange={setCode}
+          onComplete={(v) => void confirm({ code: v })}
+          disabled={busy}
+          accessibilityLabel="6-digit code"
+        />
         <ErrorLine text={error} />
         <Cta label={busy ? 'Verifying…' : 'Continue'} disabled={busy || code.length !== 6} onPress={() => void confirm({ code })} />
         <View style={s.center}>
-          <TextButton label="Resend code" onPress={() => void sendCode()} disabled={busy} />
+          <PressScale onPress={() => void sendCode()} disabled={busy} accessibilityLabel="Resend code" pressedScale={0.98} hitSlop={12}>
+            <Text style={s.link}>Resend code</Text>
+          </PressScale>
         </View>
         {choice.alsoGoogle ? (
           <>
@@ -290,7 +305,7 @@ export default function DeleteAccountScreen() {
         <BackRow onPress={() => setStep('confirm')} />
         <CountdownRing left={left} total={Math.max(rateTotal, left)} />
         <Title>Too many tries</Title>
-        <Text style={s.lead} accessibilityLiveRegion="polite">
+        <Text style={s.lead}>
           For your safety we’ve paused this for a bit. You can try again in {mmss(left)}.
         </Text>
         <View style={s.spacer} />
@@ -318,7 +333,7 @@ export default function DeleteAccountScreen() {
       </>
     );
   } else {
-    const restoreBefore = result?.restoreBefore ?? new Date().toISOString();
+    const restoreBefore = result?.restoreBefore ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
     const cancelled = result?.cancelledBookings ?? 0;
     content = (
       <>

@@ -58,7 +58,7 @@ export function deleteStyles(c: Palette) {
     field: { position: 'relative' },
     input: { height: 54, borderRadius: radii.md, borderWidth: 1, borderColor: c.line, backgroundColor: c.surface, paddingHorizontal: spacing.md, paddingRight: 48, fontFamily: fontFamily.medium, fontSize: 16, color: c.ink },
     eye: { position: 'absolute', right: 4, top: 5, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-    kicker: { fontFamily: fontFamily.semibold, fontSize: 12, letterSpacing: 1.6, color: c.accent, textTransform: 'uppercase' },
+    kicker: { fontFamily: fontFamily.bold, fontSize: 13, letterSpacing: 1.6, color: c.accent, textTransform: 'uppercase' },
     displayTitle: { ...typography.display, fontWeight: undefined, color: c.ink, fontSize: 30, lineHeight: 36, letterSpacing: -0.7 },
     body: { fontFamily: fontFamily.regular, fontSize: 15, lineHeight: 21, color: c.muted },
     ringWrap: { alignSelf: 'center', alignItems: 'center', justifyContent: 'center', marginTop: spacing.lg },

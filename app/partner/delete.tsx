@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { Linking, ScrollView, Text, View } from 'react-native';
+import { ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,8 +37,6 @@ import {
 } from '@/utils/deleteFlow';
 
 type Step = 'confirm' | 'password' | 'rate' | 'bookings' | 'done';
-
-const SUPPORT_URL = 'https://wa.me/919000000000';
 
 /** #46 partner Delete account: confirm (partner variant) → P1 password → P2 409 / C6 / C8. */
 export default function PartnerDeleteScreen() {
@@ -118,10 +116,8 @@ export default function PartnerDeleteScreen() {
           case 'retry':
             return appAlert('Try again', out.message);
           case 'opsOnly':
-            return appAlert('Contact CutLy support', out.message, [
-              { label: 'Not now', role: 'cancel' },
-              { label: 'Contact', role: 'confirm', onPress: () => void Linking.openURL(SUPPORT_URL) }
-            ]);
+            // No real support contact exists in the repo yet; don't open a placeholder number.
+            return appAlert('Contact CutLy support', out.message);
           case 'signedOut':
             return signedOut();
           default:
@@ -185,7 +181,7 @@ export default function PartnerDeleteScreen() {
         <BackRow onPress={() => setStep('confirm')} />
         <CountdownRing left={left} total={Math.max(rateTotal, left)} />
         <Title>Too many tries</Title>
-        <Text style={s.lead} accessibilityLiveRegion="polite">
+        <Text style={s.lead}>
           For your safety we’ve paused this for a bit. You can try again in {mmss(left)}.
         </Text>
         <View style={s.spacer} />
@@ -237,7 +233,7 @@ export default function PartnerDeleteScreen() {
       </>
     );
   } else {
-    const restoreBefore = result?.restoreBefore ?? new Date().toISOString();
+    const restoreBefore = result?.restoreBefore ?? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
     content = (
       <>
         <View style={s.success} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
