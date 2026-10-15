@@ -9,6 +9,10 @@ Deleting an account needs a fresh confirmation, not just being signed in. The ap
 for one of: your password, a 6-digit SMS code sent to the phone on the account, or a new
 Google sign-in. That confirmation is valid once, for 5 minutes.
 
+Tries are limited (5 per session and 20 per network address every 15 minutes); a wrong
+answer says how many tries are left, and after that the app shows a countdown. The SMS
+code is sent only to the phone already on the account, never to a number typed in.
+
 ## 2. The 14-day grace period
 
 When you delete your account:
