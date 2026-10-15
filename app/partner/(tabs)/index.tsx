@@ -5,6 +5,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { CutlyWordmark } from '@/components/CutlyWordmark';
+import { PressScale } from '@/components/PressScale';
 import { PartnerDashboardSkeleton } from '@/components/Skeleton';
 import { radii, spacing, typography, type Palette } from '@/constants/theme';
 import {
@@ -30,6 +31,8 @@ export default function PartnerHome() {
   const [loading, setLoading] = useState(true);
   const [acceptingBusy, setAcceptingBusy] = useState(false);
   const [closeSheetVisible, setCloseSheetVisible] = useState(false);
+  const restoredNotice = useSessionStore((state) => state.restoredNotice);
+  const setRestoredNotice = useSessionStore((state) => state.setRestoredNotice);
 
   const applyBoard = useCallback((next: PartnerDashboard) => {
     setBoard(next);
@@ -147,6 +150,23 @@ export default function PartnerHome() {
             <Text style={styles.historyText}>History</Text>
           </Pressable>
         </View>
+        {restoredNotice === 'partner' ? (
+          <View style={styles.restoredBanner} accessibilityRole="alert">
+            <Ionicons name="refresh-outline" size={20} color={colors.accent} />
+            <View style={styles.restoredCopy}>
+              <Text style={styles.restoredTitle}>Welcome back. Your account is restored.</Text>
+              <Text style={styles.restoredBody}>Your shop is paused. Turn bookings back on when you’re ready.</Text>
+            </View>
+            <PressScale
+              style={styles.restoredDismiss}
+              onPress={() => setRestoredNotice(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss"
+            >
+              <Ionicons name="close" size={20} color={colors.muted} />
+            </PressScale>
+          </View>
+        ) : null}
         <View style={styles.headerText}>
           <Text style={styles.hello}>Good to see you, {givenName(name) || 'partner'}</Text>
           <Text style={styles.title}>{shop?.name || 'Your shop'}</Text>
@@ -300,6 +320,20 @@ function homeStyles(colors: Palette) {
       gap: spacing.sm
     },
     headerText: { gap: 2 },
+    restoredBanner: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: spacing.sm,
+      backgroundColor: colors.surface,
+      borderRadius: radii.lg,
+      borderLeftWidth: 4,
+      borderLeftColor: colors.accent,
+      padding: spacing.md
+    },
+    restoredCopy: { flex: 1, gap: 2 },
+    restoredTitle: { fontFamily: typography.display.fontFamily, fontSize: 15, color: colors.ink },
+    restoredBody: { fontFamily: typography.body.fontFamily, fontSize: 14, lineHeight: 20, color: colors.muted },
+    restoredDismiss: { width: 44, height: 44, marginTop: -10, marginRight: -10, alignItems: 'center', justifyContent: 'center' },
     historyBtn: {
       flexDirection: 'row',
       alignItems: 'center',

@@ -9,6 +9,10 @@ Deleting an account needs a fresh confirmation, not just being signed in. The ap
 for one of: your password, a 6-digit SMS code sent to the phone on the account, or a new
 Google sign-in. That confirmation is valid once, for 5 minutes.
 
+Tries are limited (5 per session and 20 per network address every 15 minutes); a wrong
+answer says how many tries are left, and after that the app shows a countdown. The SMS
+code is sent only to the phone already on the account, never to a number typed in.
+
 ## 2. The 14-day grace period
 
 When you delete your account:
@@ -74,4 +78,3 @@ shop comes back **paused**, so the owner turns bookings back on from Partner Hom
 | `DELETED_IDENTITY_RETENTION_DAYS` | `365` | Phone fingerprint retention |
 | `DELETION_FORMER_CUSTOMER_DURING_GRACE` | `1` | Show "Former customer" during grace (product call pending) |
 | `PARTNER_SELF_DELETE_ENABLED` | `1` | `0` = partner delete is ops-only (product call pending) |
-| `PARTNER_RESTORE_SHOP_STATUS` | `PAUSED` | Shop status after partner restore; never `ACTIVE` (product call pending) |

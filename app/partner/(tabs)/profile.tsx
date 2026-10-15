@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { appAlert, appConfirm } from '@/store/useDialogStore';
+import type { ReactNode } from 'react';
+import { appAlert } from '@/store/useDialogStore';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -9,7 +9,6 @@ import {
   getPushRegisterStatus,
   registerPartnerPushNotifications
 } from '@/services/notifications';
-import { partnerApi } from '@/services/partner';
 import { useSessionStore } from '@/store/useSessionStore';
 import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
 
@@ -30,36 +29,10 @@ export default function PartnerProfile() {
   const display = name?.trim() || 'Partner';
   const contact = email || '';
   const initial = (name || email || 'P').trim().charAt(0).toUpperCase();
-  const [deleting, setDeleting] = useState(false);
 
   function confirmDelete() {
-    appConfirm({
-      title: 'Delete partner account?',
-      message: 'This removes your shop, bookings, photos, and login. This cannot be undone.',
-      cancelLabel: 'Cancel',
-      confirmLabel: 'Delete everything',
-      destructive: true,
-      onConfirm: () => {
-        void removeAccount();
-      }
-    });
-  }
-
-  async function removeAccount() {
-    if (deleting) return;
-    setDeleting(true);
-    try {
-      await partnerApi.deleteAccount();
-      const session = useSessionStore.getState();
-      session.clearPartner();
-      session.passLaunch();
-      session.setAudience('customer');
-      router.replace('/auth');
-    } catch (err) {
-      appAlert('Could not delete', err instanceof Error ? err.message : 'Try again.');
-    } finally {
-      setDeleting(false);
-    }
+    // #46: password re-auth + 14-day grace flow (replaces the old "cannot be undone" dialog).
+    router.push('/partner/delete');
   }
 
   return (
@@ -148,9 +121,9 @@ export default function PartnerProfile() {
             <Ionicons name="log-out-outline" size={20} color={colors.danger} />
             <Text style={[styles.rowText, styles.logout]}>Log out</Text>
           </Pressable>
-          <Pressable style={[styles.row, styles.rowLast]} onPress={confirmDelete} disabled={deleting}>
+          <Pressable style={[styles.row, styles.rowLast]} onPress={confirmDelete}>
             <Ionicons name="trash-outline" size={20} color={colors.danger} />
-            <Text style={[styles.rowText, styles.logout]}>{deleting ? 'Deleting…' : 'Delete profile'}</Text>
+            <Text style={[styles.rowText, styles.logout]}>Delete account</Text>
           </Pressable>
         </Section>
       </ScrollView>

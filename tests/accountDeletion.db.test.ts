@@ -506,6 +506,88 @@ suite('T3 delete account (database)', () => {
     expect((res2.body.data as { id: string }[]).map((s) => s.id)).toContain(ne.id);
   });
 
+  // #46: same customer-path races, but through the real createHold / createBooking / rescheduleBooking.
+  async function liveBookingFixture(label: string) {
+    const user = await prisma.user.create({ data: { phone: `+9184${String(Date.now()).slice(-8)}`, passwordHash: await bcrypt.hash('password123', 4) } });
+    const token = signToken({ id: user.id, email: null, phone: user.phone, name: null }, 'customer', 0);
+    const { shop } = await seedShop(`real-${label}`);
+    const service = await prisma.service.create({ data: { name: `Cut ${tag}-${label}`, durationMinutes: 30 } });
+    await prisma.shopService.create({ data: { shopId: shop.id, serviceId: service.id, pricePaise: 20000, durationMinutes: 30, bufferMinutes: 0 } });
+    const day = new Date(Date.now() + 2 * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const at = (hh: string) => new Date(`${day}T${hh}:00+05:30`).toISOString();
+    return { user, token, shop, service, at };
+  }
+
+  async function holdDeleteLock(userId: string) {
+    let go!: () => void;
+    const locked = new Promise<void>((r) => (go = r));
+    const done = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+      go();
+      await new Promise((r) => setTimeout(r, 300));
+      await tx.user.update({ where: { id: userId }, data: { deletionRequestedAt: new Date(), tokenVersion: { increment: 1 } } });
+    });
+    await locked;
+    return done;
+  }
+
+  it('#46 real createHold / createBooking / rescheduleBooking vs a delete holding the lock → Sign in again., nothing written', async () => {
+    const customer = await import('../backend/src/customer');
+    // createHold
+    {
+      const f = await liveBookingFixture('h');
+      const del = await holdDeleteLock(f.user.id);
+      const p = customer.createHold(f.token, { shopId: f.shop.id, serviceId: f.service.id, startsAt: f.at('12:00') });
+      await del;
+      await expect(p).rejects.toThrow('Sign in again.');
+      expect(await prisma.bookingHold.count({ where: { userId: f.user.id } })).toBe(0);
+    }
+    // createBooking (hold taken before the delete)
+    {
+      const f = await liveBookingFixture('b');
+      const hold = await customer.createHold(f.token, { shopId: f.shop.id, serviceId: f.service.id, startsAt: f.at('13:00') });
+      const del = await holdDeleteLock(f.user.id);
+      const p = customer.createBooking(f.token, { shopId: f.shop.id, serviceId: f.service.id, startsAt: f.at('13:00'), holdId: hold.id });
+      await del;
+      await expect(p).rejects.toThrow('Sign in again.');
+      expect(await prisma.booking.count({ where: { userId: f.user.id } })).toBe(0);
+    }
+    // rescheduleBooking (booking + new hold before the delete)
+    {
+      const f = await liveBookingFixture('r');
+      const h1 = await customer.createHold(f.token, { shopId: f.shop.id, serviceId: f.service.id, startsAt: f.at('14:00') });
+      const booking = await customer.createBooking(f.token, { shopId: f.shop.id, serviceId: f.service.id, startsAt: f.at('14:00'), holdId: h1.id });
+      await prisma.booking.update({ where: { id: booking.id }, data: { status: 'CONFIRMED' } });
+      const h2 = await customer.createHold(f.token, { shopId: f.shop.id, serviceId: f.service.id, startsAt: f.at('16:00') });
+      const del = await holdDeleteLock(f.user.id);
+      const p = customer.rescheduleBooking(f.token, booking.id, { startsAt: f.at('16:00'), holdId: h2.id });
+      await del;
+      await expect(p).rejects.toThrow('Sign in again.');
+      const row = await prisma.booking.findUniqueOrThrow({ where: { id: booking.id } });
+      expect(row.startsAt.toISOString()).toBe(f.at('14:00'));
+    }
+  }, 30_000);
+
+  it('#46 real createBooking vs the real DELETE route at varying offsets never leaves a live booking', async () => {
+    const customer = await import('../backend/src/customer');
+    for (let round = 0; round < 5; round++) {
+      const f = await liveBookingFixture(`m${round}`);
+      const hold = await customer.createHold(f.token, { shopId: f.shop.id, serviceId: f.service.id, startsAt: f.at('15:00') });
+      const re = await call('POST', '/api/auth/reauth', { token: f.token, body: { password: 'password123' } });
+      const book = (async () => {
+        await new Promise((r) => setTimeout(r, round * 5));
+        return customer.createBooking(f.token, { shopId: f.shop.id, serviceId: f.service.id, startsAt: f.at('15:00'), holdId: hold.id });
+      })().then(() => 'booked', (e: Error) => e.message);
+      const del = call('DELETE', '/api/auth/account', { token: f.token, reauth: re.body.data.reauthToken });
+      const [b, d] = await Promise.all([book, del]);
+      expect(d.status).toBe(200);
+      // Safe outcomes: booked first (then cancelled by the delete), session already dead, or the
+      // delete released the hold first. The invariant that matters is the count check below.
+      expect(['booked', 'Sign in again.', 'Your hold expired. Go back and pick the slot again.']).toContain(b);
+      expect(await prisma.booking.count({ where: { userId: f.user.id, status: { not: 'CANCELLED' } } })).toBe(0);
+    }
+  }, 30_000);
+
   it('DBA #10: Google sign-in never reclaims the email of a pending-deletion account', async () => {
     const { finishGoogleSignIn } = await import('../backend/src/auth');
     const email = `${tag}-g10@example.com`;

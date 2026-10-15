@@ -20,8 +20,8 @@ import { PrimaryButton } from '@/components/PrimaryButton';
 import { ScreenBack } from '@/components/ScreenBack';
 import { fontFamily } from '@/constants/fonts';
 import { radii, spacing, type Palette } from '@/constants/theme';
-import { auth, deleteAccount, refreshProfile, updateProfile } from '@/services/auth';
-import { appAlert, appConfirm } from '@/store/useDialogStore';
+import { auth, refreshProfile, updateProfile } from '@/services/auth';
+import { appAlert } from '@/store/useDialogStore';
 import { useColors, useThemeStore, useThemedStyles } from '@/store/useThemeStore';
 import { useSessionStore } from '@/store/useSessionStore';
 
@@ -61,7 +61,6 @@ export default function Profile() {
   const [draftGender, setDraftGender] = useState<GenderId | ''>((gender as GenderId) || '');
   const [genderOpen, setGenderOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -118,31 +117,8 @@ export default function Profile() {
   }
 
   function confirmDelete() {
-    if (deleting) return;
-    appConfirm({
-      title: 'Delete account?',
-      message: 'This removes your login, bookings, and saved places. This cannot be undone.',
-      cancelLabel: 'Cancel',
-      confirmLabel: 'Delete account',
-      destructive: true,
-      onConfirm: () => {
-        void removeAccount();
-      }
-    });
-  }
-
-  async function removeAccount() {
-    if (deleting) return;
-    setDeleting(true);
-    try {
-      await deleteAccount();
-      useSessionStore.getState().clear();
-      router.replace('/welcome');
-    } catch (err) {
-      appAlert('Could not delete', err instanceof Error ? err.message : 'Try again.');
-    } finally {
-      setDeleting(false);
-    }
+    // #46: re-auth + 14-day grace flow (replaces the old "cannot be undone" dialog).
+    router.push('/account/delete');
   }
 
   async function shareApp() {

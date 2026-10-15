@@ -60,6 +60,8 @@ export default function Auth() {
 
   function afterAuth() {
     const session = useSessionStore.getState();
+    // #46 C9: SessionGate (app/_layout.tsx) owns the /account/restored redirect.
+    if (session.restoredNotice === 'customer') return;
     if (!customerProfileReady(session)) {
       router.replace('/complete-profile');
       return;

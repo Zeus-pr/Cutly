@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { BookingStatus, Prisma, PrismaClient, ShopKind } from '@prisma/client';
-import { checkPhoneOtpCode, jwtSecret, signToken, tokenVersionMatches } from './auth';
+import { purposeBoundOtpCheck, jwtSecret, signToken, tokenVersionMatches } from './auth';
 import {
   PARTNER_BLOCKING_STATUSES,
   blocksPartnerDelete,
@@ -93,15 +93,15 @@ export async function partnerFromToken(token: string) {
 }
 
 /**
- * T3-Q11: partner sign-in inside the grace window restores the account; the shop goes
- * CLOSED → PAUSED (never straight to ACTIVE). Past the deadline: null (generic failure).
+ * T3-Q11 (approved rule): partner sign-in inside the grace window restores the account; the
+ * shop goes CLOSED → PAUSED (never straight to ACTIVE), and the partner reopens it from P3. Past the deadline: null (generic failure).
  */
 async function partnerSignInGate<T extends { id: string; deletionRequestedAt: Date | null; deletedAt: Date | null }>(
   partner: T,
   now = new Date()
-): Promise<boolean> {
+): Promise<false | 'active' | 'restored'> {
   const state = deletionState(partner, now);
-  if (state === 'active') return true;
+  if (state === 'active') return 'active';
   if (state !== 'pending') return false;
   return prisma.$transaction(async (tx) => {
     const restored = await tx.partner.updateMany({
@@ -111,9 +111,9 @@ async function partnerSignInGate<T extends { id: string; deletionRequestedAt: Da
     if (restored.count !== 1) return false;
     await tx.shop.updateMany({
       where: { ownerPartnerId: partner.id, status: 'CLOSED', deletedAt: null },
-      data: shopStatusData(deletionFlags().partnerRestoreShopStatus)
+      data: shopStatusData('PAUSED')
     });
-    return true;
+    return 'restored' as const;
   });
 }
 
@@ -136,10 +136,12 @@ export async function partnerSignIn(email: string, password: string) {
   if (!partner?.passwordHash || !(await bcrypt.compare(password, partner.passwordHash))) {
     throw new Error('Email or password is incorrect.');
   }
-  if (!(await partnerSignInGate(partner))) throw new Error('Email or password is incorrect.');
+  const gate = await partnerSignInGate(partner);
+  if (!gate) throw new Error('Email or password is incorrect.');
   const profile = publicPartner(partner);
   const shop = await shopFor(partner.id);
-  return { token: signToken(profile, 'partner', partner.tokenVersion), partner: profile, shop };
+  // #46: `restored` lets the app show the P3 "Welcome back" banner once.
+  return { token: signToken(profile, 'partner', partner.tokenVersion), partner: profile, shop, restored: gate === 'restored' };
 }
 
 async function shopFor(partnerId: string) {
@@ -445,7 +447,9 @@ export async function setPartnerAcceptingAppointments(token: string, mode: Partn
     };
   }
 
-  await prisma.shop.update({ where: { id: shop.id }, data });
+  // #46 (P3): a restored shop comes back PAUSED and returns to ACTIVE only when the partner opens it.
+  const reopen = mode === 'open' && shop.status === 'PAUSED' ? shopStatusData('ACTIVE') : {};
+  await prisma.shop.update({ where: { id: shop.id }, data: { ...data, ...reopen } });
   return shopFor(partner.id);
 }
 
@@ -1576,7 +1580,7 @@ export async function savePartnerPushToken(token: string, pushToken: string) {
 export async function startPartnerReauth(token: string, input: ReauthInput) {
   const current = await partnerFromToken(token);
   const partner = await prisma.partner.findUniqueOrThrow({ where: { id: current.id } });
-  await verifyReauthProof(partner, input, { checkOtp: checkPhoneOtpCode, verifyGoogle: defaultVerifyGoogle });
+  await verifyReauthProof(partner, input, { checkOtp: purposeBoundOtpCheck('reauth'), verifyGoogle: defaultVerifyGoogle });
   return issueReauthToken(prisma, jwtSecret(), partner.id, 'partner');
 }
 
@@ -1623,7 +1627,11 @@ async function deletePartnerTx(partnerId: string, reauthToken: string | null | u
       await tx.shop.update({ where: { id: shop.id }, data: shopStatusData('CLOSED') });
       const live = await tx.booking.findMany({
         where: { shopId: shop.id, status: { in: [...PARTNER_BLOCKING_STATUSES] } },
-        select: { id: true, bookingCode: true, startsAt: true, endsAt: true, status: true },
+        select: {
+          id: true, bookingCode: true, startsAt: true, endsAt: true, status: true,
+          user: { select: { name: true, phone: true, deletionRequestedAt: true, deletedAt: true } },
+          services: { select: { service: { select: { name: true } } } }
+        },
         orderBy: { startsAt: 'asc' }
       });
       const blocking = live.filter((row) => blocksPartnerDelete(row, now));
@@ -1632,7 +1640,11 @@ async function deletePartnerTx(partnerId: string, reauthToken: string | null | u
           bookings: blocking.map((row) => ({
             id: row.id,
             bookingCode: row.bookingCode,
-            startsAt: row.startsAt.toISOString()
+            startsAt: row.startsAt.toISOString(),
+            status: row.status,
+            // #46: names for the app's P2 list (same masking as Floor).
+            customerName: displayCustomerName(row.user),
+            serviceNames: row.services.map((s) => s.service.name)
           }))
         });
       }

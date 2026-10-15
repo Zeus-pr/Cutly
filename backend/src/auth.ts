@@ -31,7 +31,12 @@ export type PublicUser = {
   dateOfBirth?: string | null;
   inviteCode?: string | null;
   googleLinked?: boolean;
+  /** #46: lets the app pick the re-auth method (C2 OTP / C4 Google / C5 password). */
+  hasPassword?: boolean;
+  authMethods?: AuthMethod[];
 };
+
+export type AuthMethod = 'phone' | 'password' | 'google';
 
 /** Fail closed if JWT_SECRET missing (SEC-10). */
 export function jwtSecret() {
@@ -55,7 +60,12 @@ function publicUser(user: {
   dateOfBirth?: Date | null;
   inviteCode?: string | null;
   googleSub?: string | null;
+  passwordHash?: string | null;
 }): PublicUser {
+  const authMethods: AuthMethod[] = [];
+  if (user.phone) authMethods.push('phone');
+  if (user.passwordHash) authMethods.push('password');
+  if (user.googleSub) authMethods.push('google');
   return {
     id: user.id,
     email: user.email,
@@ -64,7 +74,9 @@ function publicUser(user: {
     gender: user.gender ?? null,
     dateOfBirth: dateOnly(user.dateOfBirth),
     inviteCode: user.inviteCode ?? null,
-    googleLinked: Boolean(user.googleSub)
+    googleLinked: Boolean(user.googleSub),
+    hasPassword: Boolean(user.passwordHash),
+    authMethods
   };
 }
 
@@ -94,9 +106,10 @@ export function tokenVersionMatches(payload: object, tokenVersion: number) {
   return tv === tokenVersion;
 }
 
-function session(user: User) {
+function session(user: User, restored = false) {
   const profile = publicUser(user);
-  return { token: signToken(profile, 'customer', user.tokenVersion), user: profile };
+  // `restored: true` only on the sign-in that cancelled a pending deletion (app shows C9 once).
+  return { token: signToken(profile, 'customer', user.tokenVersion), user: profile, restored };
 }
 
 export const ACCOUNT_PENDING_DELETION = () =>
@@ -105,18 +118,22 @@ export const ACCOUNT_PENDING_DELETION = () =>
 /**
  * T3: a sign-in inside the grace window restores the account (nothing was blanked).
  * Past the deadline it is treated as purged → the caller's generic auth failure.
- * Returns the usable row, or null when the sign-in must fail.
+ * Returns the usable row plus whether this sign-in restored it (#46: drives `restored`),
+ * or null when the sign-in must fail.
  */
-async function signInGate(user: User, now = new Date()): Promise<User | null> {
+type GateResult = { user: User; restored: boolean };
+
+async function signInGate(user: User, now = new Date()): Promise<GateResult | null> {
   const state = deletionState(user, now);
-  if (state === 'active') return user;
+  if (state === 'active') return { user, restored: false };
   if (state !== 'pending') return null;
   const restored = await prisma.user.updateMany({
     where: { id: user.id, deletedAt: null, deletionRequestedAt: user.deletionRequestedAt },
     data: { deletionRequestedAt: null }
   });
   if (restored.count !== 1) return null;
-  return prisma.user.findUnique({ where: { id: user.id } });
+  const row = await prisma.user.findUnique({ where: { id: user.id } });
+  return row ? { user: row, restored: true } : null;
 }
 
 /** SEC-08: same message for email/phone taken — no account enumeration. */
@@ -249,7 +266,7 @@ export async function signIn(email: string, password: string) {
   for (const user of matches) {
     if (user.passwordHash && (await bcrypt.compare(password, user.passwordHash))) {
       const usable = await signInGate(user);
-      if (usable) return session(usable);
+      if (usable) return session(usable.user, usable.restored);
     }
   }
   throw new Error('Email or password is incorrect.');
@@ -476,14 +493,16 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
   if (subRow && isDeletionRequested(subRow)) {
     const usable = await signInGate(subRow);
     if (!usable) throw new Error(GOOGLE_SIGN_IN_FAILED);
-    return session(usable);
+    return session(usable.user, usable.restored);
   }
   const bySub = subRow;
   let emailRows = email ? await findUsersByEmail(email) : [];
   const pendingOwner = emailRows.find((row) => isDeletionRequested(row));
+  let restoredOwnerId: string | null = null;
   if (pendingOwner) {
     const sameGoogle = !pendingOwner.googleSub || pendingOwner.googleSub === googleSub;
     if (!bySub && pendingOwner.emailVerified && sameGoogle && (await signInGate(pendingOwner))) {
+      restoredOwnerId = pendingOwner.id;
       emailRows = email ? await findUsersByEmail(email) : [];
     } else {
       throw new Error(GOOGLE_SIGN_IN_FAILED);
@@ -536,7 +555,7 @@ export async function finishGoogleSignIn(googleSub: string, email: string | null
       }
     });
   });
-  return session(user);
+  return session(user, user.id === restoredOwnerId);
 }
 
 let verifyServiceSid = process.env.TWILIO_VERIFY_SERVICE_SID || '';
@@ -568,20 +587,51 @@ async function verifyService() {
   return { client, serviceSid: verifyServiceSid };
 }
 
-export async function sendPhoneOtp(phone: string) {
-  const recent = await prisma.phoneOtp.findFirst({ where: { phone, codeHash: 'twilio-verify' }, orderBy: { createdAt: 'desc' } });
-  if (recent && Date.now() - recent.createdAt.getTime() < OTP_COOLDOWN_MS) {
-    throw new Error('Wait a moment before requesting another code.');
-  }
+/** #46: what an SMS code was sent for. Twilio Verify is per phone, so we bind the purpose here. */
+export type OtpPurpose = 'login' | 'reauth';
+
+async function twilioSendSms(phone: string) {
   const { client, serviceSid } = await verifyService();
   try {
     await client.verify.v2.services(serviceSid).verifications.create({ to: phone, channel: 'sms' });
   } catch (error) {
     twilioError(error);
   }
+}
+
+export async function sendPhoneOtp(
+  phone: string,
+  purpose: OtpPurpose = 'login',
+  deps: { sendSms: (phone: string) => Promise<void> } = { sendSms: twilioSendSms }
+) {
+  // Cooldown is per purpose: login sends (anyone who knows the phone) never block a re-auth send, and vice versa.
+  const recent = await prisma.phoneOtp.findFirst({ where: { phone, purpose, codeHash: 'twilio-verify' }, orderBy: { createdAt: 'desc' } });
+  if (recent && Date.now() - recent.createdAt.getTime() < OTP_COOLDOWN_MS) {
+    throw new Error('Wait a moment before requesting another code.');
+  }
+  await deps.sendSms(phone);
   await prisma.phoneOtp.create({
-    data: { phone, codeHash: 'twilio-verify', expiresAt: new Date(Date.now() + OTP_TTL_MS) }
+    data: { phone, codeHash: 'twilio-verify', purpose, expiresAt: new Date(Date.now() + OTP_TTL_MS) }
   });
+}
+
+/**
+ * #46 (sec LOW): login and re-auth codes are not interchangeable. A code verifies only if an
+ * unexpired send for THIS purpose exists for the phone. Scoped per purpose, so login sends never
+ * shadow a re-auth send (or the reverse). Checked BEFORE Twilio so a mismatch consumes nothing.
+ */
+export async function otpPurposeMatches(phone: string, purpose: OtpPurpose, now = new Date()) {
+  const live = await prisma.phoneOtp.findFirst({
+    where: { phone, purpose, codeHash: 'twilio-verify', expiresAt: { gt: now } },
+    orderBy: { createdAt: 'desc' }
+  });
+  return Boolean(live);
+}
+
+type VerifyCode = (phone: string, code: string) => Promise<boolean>;
+
+export function purposeBoundOtpCheck(purpose: OtpPurpose, verifyCode: VerifyCode = checkPhoneOtpCode): VerifyCode {
+  return async (phone, code) => (await otpPurposeMatches(phone, purpose)) && verifyCode(phone, code);
 }
 
 /** Twilio Verify check. True only when the code is approved for this phone. */
@@ -597,9 +647,14 @@ export async function checkPhoneOtpCode(phone: string, code: string) {
   return status === 'approved';
 }
 
-export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: string) {
-  if (!(await checkPhoneOtpCode(phone, code))) throw new Error('That code is incorrect or expired.');
-  await prisma.phoneOtp.deleteMany({ where: { phone } });
+export async function verifyPhoneOtp(
+  phone: string,
+  code: string,
+  mergeToken?: string,
+  deps: { verifyCode: VerifyCode } = { verifyCode: checkPhoneOtpCode }
+) {
+  if (!(await purposeBoundOtpCheck('login', deps.verifyCode)(phone, code))) throw new Error('That code is incorrect or expired.');
+  await prisma.phoneOtp.deleteMany({ where: { phone, purpose: 'login' } });
 
   const byPhone = await prisma.user.findUnique({ where: { phone } });
 
@@ -641,19 +696,31 @@ export async function verifyPhoneOtp(phone: string, code: string, mergeToken?: s
     // T3: OTP sign-in is the restore path inside the grace window.
     const usable = await signInGate(byPhone);
     if (!usable) throw new Error('That code is incorrect or expired.');
-    return session(usable);
+    return session(usable.user, usable.restored);
   }
   const user = byPhone || (await prisma.user.create({ data: { phone } }));
   return session(user);
 }
 
 /** T3 step-up: POST /api/auth/reauth → one-time 5-minute token for DELETE /api/auth/account. */
-export async function startCustomerReauth(token: string, input: ReauthInput) {
+export async function startCustomerReauth(
+  token: string,
+  input: ReauthInput,
+  deps: { verifyCode: VerifyCode } = { verifyCode: checkPhoneOtpCode }
+) {
   const current = await userFromToken(token);
   const user = await prisma.user.findUniqueOrThrow({ where: { id: current.id } });
-  await verifyReauthProof(user, input, { checkOtp: checkPhoneOtpCode, verifyGoogle: defaultVerifyGoogle });
-  if (input.method === 'otp' && user.phone) await prisma.phoneOtp.deleteMany({ where: { phone: user.phone } });
+  await verifyReauthProof(user, input, { checkOtp: purposeBoundOtpCheck('reauth', deps.verifyCode), verifyGoogle: defaultVerifyGoogle });
+  if (input.method === 'otp' && user.phone) await prisma.phoneOtp.deleteMany({ where: { phone: user.phone, purpose: 'reauth' } });
   return issueReauthToken(prisma, secret(), user.id, 'customer');
+}
+
+/** #46: re-auth SMS to the signed-in account's own phone (never a phone from the request). */
+export async function sendCustomerReauthOtp(token: string) {
+  const current = await userFromToken(token);
+  if (!current.phone) throw new AppError('This account has no phone. Use another way to confirm.', 400, 'REAUTH_NO_PHONE');
+  await sendPhoneOtp(current.phone, 'reauth');
+  return { sent: true as const, phoneLast4: current.phone.slice(-4) };
 }
 
 /**

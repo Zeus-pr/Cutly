@@ -11,6 +11,7 @@ export default function PartnerLayout() {
       <Stack.Screen name="details" />
       <Stack.Screen name="hours" />
       <Stack.Screen name="settings" />
+      <Stack.Screen name="delete" />
       <Stack.Screen name="history/index" />
       <Stack.Screen name="history/[id]" />
       <Stack.Screen

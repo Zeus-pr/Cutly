@@ -1,5 +1,7 @@
 import { getApiBaseUrl } from '@/services/apiBase';
 import { useSessionStore } from '@/store/useSessionStore';
+import { confirmAndDeleteCustomer, type ReauthProof } from '@/services/accountDeletion';
+import type { AuthMethod } from '@/utils/deleteFlow';
 
 function apiBase() {
   return getApiBaseUrl();
@@ -13,6 +15,8 @@ type SessionUser = {
   gender?: string | null;
   dateOfBirth?: string | null;
   googleLinked?: boolean;
+  hasPassword?: boolean;
+  authMethods?: AuthMethod[];
 };
 
 async function post<T>(path: string, body: unknown, token?: string): Promise<T> {
@@ -34,8 +38,10 @@ async function post<T>(path: string, body: unknown, token?: string): Promise<T> 
   return payload.data as T;
 }
 
-function save(session: { token: string; user: SessionUser }) {
+function save(session: { token: string; user: SessionUser; restored?: boolean }) {
   const user = session.user;
+  // #46 C9: this sign-in cancelled a pending deletion.
+  useSessionStore.getState().setRestoredNotice(session.restored ? 'customer' : null);
   useSessionStore.getState().setSession(session.token, user.phone || '', user.email, user.name);
   useSessionStore.getState().setProfile({
     phone: user.phone,
@@ -43,7 +49,9 @@ function save(session: { token: string; user: SessionUser }) {
     name: user.name,
     gender: user.gender ?? null,
     dateOfBirth: user.dateOfBirth ?? null,
-    googleLinked: Boolean(user.googleLinked)
+    googleLinked: Boolean(user.googleLinked),
+    hasPassword: Boolean(user.hasPassword),
+    authMethods: user.authMethods ?? null
   });
 }
 
@@ -100,20 +108,12 @@ export async function updateProfile(input: {
   useSessionStore.getState().setProfile(user);
 }
 
-export async function deleteAccount() {
-  const token = useSessionStore.getState().accessToken;
-  if (!token) throw new Error('Sign in again.');
-  let response: Response;
-  try {
-    response = await fetch(`${apiBase()}/auth/account`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` }
-    });
-  } catch {
-    throw new Error('Cannot reach the CUTLY server. Start it with npm run backend:dev.');
-  }
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Could not delete account.');
+/**
+ * #46: Delete account = re-auth (OTP / password / Google) then DELETE with X-Reauth-Token.
+ * Throws `ApiError` (utils/deleteFlow) so the screen can route on the code.
+ */
+export async function deleteAccount(proof: ReauthProof) {
+  return confirmAndDeleteCustomer(proof);
 }
 
 export const auth = {

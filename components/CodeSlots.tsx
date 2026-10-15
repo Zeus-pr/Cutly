@@ -26,6 +26,8 @@ type Props = {
   disabled?: boolean;
   /** Coral digit + ring when filled (Floor visit PIN). */
   accentDigits?: boolean;
+  /** Screen-reader label for the hidden input. */
+  accessibilityLabel?: string;
 };
 
 /**
@@ -39,7 +41,8 @@ export function CodeSlots({
   onComplete,
   autoFocus = true,
   disabled,
-  accentDigits = false
+  accentDigits = false,
+  accessibilityLabel = 'Verification code'
 }: Props) {
   const colors = useColors();
   const styles = useThemedStyles(slotStyles);
@@ -100,7 +103,7 @@ export function CodeSlots({
         caretHidden
         editable={!disabled}
         style={styles.ghost}
-        accessibilityLabel="Verification code"
+        accessibilityLabel={accessibilityLabel}
       />
     </Pressable>
   );
