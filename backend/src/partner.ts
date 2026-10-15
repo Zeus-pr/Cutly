@@ -1586,11 +1586,34 @@ export async function startPartnerReauth(token: string, input: ReauthInput) {
  *   racing booking either fails (shop no longer ACTIVE) or this returns 409.
  * - Partner: deletionRequestedAt, tokenVersion++, pushToken null. PII stays until purge.
  */
+/** Postgres serialization failure / Prisma write conflict (P2034) → a concurrent hold or booking won. */
+export function isSerializationConflict(error: unknown) {
+  const e = error as { code?: string; meta?: { code?: string }; message?: string };
+  return e?.code === 'P2034' || e?.meta?.code === '40001' || /could not serialize|40001|write conflict/i.test(e?.message || '');
+}
+
 export async function deletePartnerAccount(token: string, reauthToken?: string | null, now = new Date()) {
   const current = await partnerFromToken(token);
   if (!deletionFlags().partnerSelfDelete) {
     throw new AppError('Ask CutLy support to close your partner account.', 403, 'PARTNER_DELETE_OPS_ONLY');
   }
+  try {
+    await deletePartnerTx(current.id, reauthToken, now);
+  } catch (error) {
+    if (isSerializationConflict(error)) {
+      throw new AppError('A customer is booking right now. Try again in a moment.', 409, 'PARTNER_DELETE_CONFLICT');
+    }
+    throw error;
+  }
+  return {
+    deleted: true as const,
+    deletionRequestedAt: now.toISOString(),
+    restoreBefore: deletionDeadline(now).toISOString()
+  };
+}
+
+async function deletePartnerTx(partnerId: string, reauthToken: string | null | undefined, now: Date) {
+  const current = { id: partnerId };
   await prisma.$transaction(async (tx) => {
     await consumeReauthToken(tx, jwtSecret(), reauthToken, current.id, 'partner', now);
     const shop = await tx.shop.findUnique({ where: { ownerPartnerId: current.id } });
@@ -1618,9 +1641,4 @@ export async function deletePartnerAccount(token: string, reauthToken?: string |
       data: { deletionRequestedAt: now, tokenVersion: { increment: 1 }, pushToken: null }
     });
   }, txOpts);
-  return {
-    deleted: true as const,
-    deletionRequestedAt: now.toISOString(),
-    restoreBefore: deletionDeadline(now).toISOString()
-  };
 }

@@ -430,9 +430,9 @@ export async function createBookingReview(
   if (!booking) throw new Error('Booking not found.');
   if (booking.status !== 'COMPLETED') throw new Error('You can review only after the visit is completed.');
   if (booking.review) throw new Error('You already reviewed this visit.');
-  // T3 case 36: no new reviews for a closed (or paused) shop.
+  // T3 case 36 (Prajesh): PAUSED shops still take reviews; only CLOSED/purged shops block.
   const shopRow = await prisma.shop.findUnique({ where: { id: booking.shopId }, select: { status: true, deletedAt: true } });
-  if (shopRow?.status !== 'ACTIVE' || shopRow.deletedAt) throw SHOP_CLOSED();
+  if (!shopRow || shopRow.status === 'CLOSED' || shopRow.deletedAt) throw SHOP_CLOSED();
 
   const review = await prisma.$transaction(async (tx) => {
     const created = await tx.review.create({
@@ -1502,8 +1502,8 @@ function serializeBooking(booking: NonNullable<Awaited<ReturnType<typeof loadBoo
   const canReschedule = confirmedUpcoming;
   const refundOnCancel = awaiting || (confirmedUpcoming && policy.refundAdvance);
   const hasReview = Boolean(booking.review);
-  // T3 case 36: reviews only while the shop is ACTIVE.
-  const canReview = booking.status === 'COMPLETED' && !hasReview && booking.shop.status === 'ACTIVE' && !booking.shop.deletedAt;
+  // T3 case 36 (Prajesh): reviews allowed at ACTIVE and PAUSED shops; CLOSED/purged blocks.
+  const canReview = booking.status === 'COMPLETED' && !hasReview && booking.shop.status !== 'CLOSED' && !booking.shop.deletedAt;
   const { remainingPaise, balanceSettled } = bookingBalance(booking);
   const lat = toNum(booking.shop.latitude as never);
   const lng = toNum(booking.shop.longitude as never);

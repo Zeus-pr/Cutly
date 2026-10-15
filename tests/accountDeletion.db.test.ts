@@ -339,6 +339,63 @@ suite('T3 delete account (database)', () => {
     expect((await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } })).phone).toBeNull();
   });
 
+  it('reviews: PAUSED shop allowed, CLOSED rejected (Prajesh)', async () => {
+    const { shop, barber } = await seedShop('rv');
+    const customer = await prisma.user.create({ data: { phone: `+9190${String(Date.now()).slice(-8)}` } });
+    const ctoken = signToken({ id: customer.id, email: null, phone: customer.phone, name: null }, 'customer', 0);
+    const a = await seedBooking(customer.id, shop.id, barber.id, 'COMPLETED', new Date(Date.now() - 2 * 86_400_000));
+    const b = await seedBooking(customer.id, shop.id, barber.id, 'COMPLETED', new Date(Date.now() - 86_400_000));
+    await prisma.shop.update({ where: { id: shop.id }, data: { status: 'PAUSED', isActive: false } });
+    expect((await call('GET', `/api/bookings/${a.id}`, { token: ctoken })).body.data.canReview).toBe(true);
+    expect((await call('POST', `/api/bookings/${a.id}/review`, { token: ctoken, body: { shopRating: 4, barberRating: 4 } })).status).toBe(200);
+    await prisma.shop.update({ where: { id: shop.id }, data: { status: 'CLOSED' } });
+    expect((await call('GET', `/api/bookings/${b.id}`, { token: ctoken })).body.data.canReview).toBe(false);
+    expect(await call('POST', `/api/bookings/${b.id}/review`, { token: ctoken, body: { shopRating: 4, barberRating: 4 } })).toMatchObject({
+      status: 410,
+      body: { code: 'SHOP_CLOSED' }
+    });
+  });
+
+  it('partner delete vs a concurrent hold: typed 409 or clean success, never 500 or an orphan hold', async () => {
+    const { Prisma } = await import('@prisma/client');
+    for (let round = 0; round < 3; round++) {
+      const email = `${tag}-race${round}@example.com`;
+      const partner = await prisma.partner.create({ data: { email, passwordHash: await bcrypt.hash('password123', 4) } });
+      const ptoken = signToken({ id: partner.id, email, phone: null, name: null }, 'partner', 0);
+      const { shop, barber } = await seedShop(`race${round}`, partner.id);
+      const customer = await prisma.user.create({ data: { phone: `+9189${round}${String(Date.now()).slice(-7)}` } });
+      const re = await call('POST', '/api/partner/reauth', { token: ptoken, body: { password: 'password123' } });
+
+      // Same shape as createHold: Serializable, shop row FOR SHARE + ACTIVE check, then insert the hold.
+      let goDelete!: () => void;
+      const lockTaken = new Promise<void>((r) => (goDelete = r));
+      const hold = prisma.$transaction(async (tx) => {
+        const live = await tx.$queryRaw<{ status: string }[]>`SELECT status::text AS status FROM "Shop" WHERE id = ${shop.id} FOR SHARE`;
+        if (live[0]?.status !== 'ACTIVE') throw new Error('closed');
+        goDelete();
+        await new Promise((r) => setTimeout(r, 300));
+        await tx.bookingHold.create({
+          data: {
+            userId: customer.id, shopId: shop.id, barberId: barber.id,
+            startsAt: new Date(Date.now() + 86_400_000), endsAt: new Date(Date.now() + 86_400_000 + 1_800_000),
+            expiresAt: new Date(Date.now() + 600_000), idempotencyKey: `${tag}-race-${round}`
+          }
+        });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).then(() => 'held', () => 'hold-failed');
+      await lockTaken;
+      const del = call('DELETE', '/api/partner/account', { token: ptoken, reauth: re.body.data.reauthToken });
+      const [h, d] = await Promise.all([hold, del]);
+      // The hold commits first and the delete aborts with a serialization failure → typed 409.
+      expect(h).toBe('held');
+      expect(d).toMatchObject({ status: 409, body: { code: 'PARTNER_DELETE_CONFLICT' } });
+      expect((await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } })).status).toBe('ACTIVE');
+      const shopNow = await prisma.shop.findUniqueOrThrow({ where: { id: shop.id } });
+      const holds = await prisma.bookingHold.count({ where: { shopId: shop.id } });
+      if (shopNow.status === 'CLOSED') expect(holds).toBe(0);
+      expect(['held', 'hold-failed']).toContain(h);
+    }
+  }, 30_000);
+
   it('adminApp is importable and answers without a listener', async () => {
     const s = adminApp.listen(0, '127.0.0.1');
     await new Promise((r) => s.once('listening', r));
