@@ -12,7 +12,7 @@ import {
   signupEmailVerifyOn,
   emailConfigProblems
 } from '../backend/src/emailCode';
-import { canStillSignIn } from '../backend/src/emailRelease';
+import { canStillSignIn, googleUnverifiedOwnerMessage } from '../backend/src/emailRelease';
 import { codeMail, emailChangedMail, signupNoticeMail, DEFAULT_EMAIL_FROM } from '../backend/src/mail';
 import { suppressionFor, verifySvixSignature } from '../backend/src/resendWebhook';
 
@@ -144,5 +144,15 @@ describe('T4 Resend webhook', () => {
     expect(suppressionFor({ type: 'email.bounced', data: { to: ['a@x.com'], bounce: { type: 'Transient' } } })).toBeNull();
     expect(suppressionFor({ type: 'email.complained', data: { to: 'a@x.com' } })).toEqual({ emails: ['a@x.com'], reason: 'complaint' });
     expect(suppressionFor({ type: 'email.delivered', data: { to: ['a@x.com'] } })).toBeNull();
+  });
+});
+
+describe('GOOGLE_EMAIL_UNVERIFIED_OWNER copy (PR Review #58 re-review)', () => {
+  it('adds the sign-up way out only when two-step signup is on', () => {
+    const on = googleUnverifiedOwnerMessage(true);
+    const off = googleUnverifiedOwnerMessage(false);
+    for (const m of [on, off]) expect(m).toMatch(/phone number or password, then verify the email or link Google from Profile/);
+    expect(on).toMatch(/Create an account with this email and enter the code we send to free it/);
+    expect(off).not.toMatch(/Create an account/);
   });
 });

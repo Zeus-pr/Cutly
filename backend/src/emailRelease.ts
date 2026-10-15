@@ -4,7 +4,7 @@
  * (Google, a verified signup, or a verified email change), unverified holders are released.
  */
 import { Prisma } from '@prisma/client';
-import { EMAIL_CLAIM_REVIEW, EMAIL_TAKEN, emailHmac } from './emailCode';
+import { EMAIL_CLAIM_REVIEW, EMAIL_TAKEN, emailHmac, signupEmailVerifyOn } from './emailCode';
 import { AppError } from './httpError';
 import { notifyUser } from './push';
 
@@ -32,12 +32,17 @@ export function canStillSignIn(row: Pick<HolderRow, 'phone' | 'googleSub'>) {
  * PR Review #58 blocker (a): the Google email is on an older account that never verified it.
  * That account may be the Google owner's own, so we don't split it or release the email.
  */
+export function googleUnverifiedOwnerMessage(signupVerifyOn = signupEmailVerifyOn()) {
+  const base =
+    "This email is already on a CutLy account that has not verified it. Sign in with that account's phone number or password, then verify the email or link Google from Profile.";
+  // PR Review #58 re-review: the way out for a victim of a squatter. Only true when two-step
+  // signup is on; with SIGNUP_EMAIL_VERIFY off, one-step signup refuses a taken email.
+  return signupVerifyOn
+    ? `${base} Not your account? Create an account with this email and enter the code we send to free it.`
+    : base;
+}
 export const GOOGLE_EMAIL_UNVERIFIED_OWNER = () =>
-  new AppError(
-    'This email is already on a CutLy account that has not verified it. Sign in with that account\'s phone number or password, then verify the email or link Google from Profile.',
-    409,
-    'GOOGLE_EMAIL_UNVERIFIED_OWNER'
-  );
+  new AppError(googleUnverifiedOwnerMessage(), 409, 'GOOGLE_EMAIL_UNVERIFIED_OWNER');
 
 export class ReleaseStale extends Error {
   constructor() {

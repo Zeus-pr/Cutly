@@ -217,12 +217,40 @@ suite('T4 #9 email verification (database)', () => {
     await expect(A.finishGoogleSignIn(sub, email, 'Owner')).rejects.toMatchObject({
       status: 409,
       code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER',
-      message: expect.stringMatching(/phone number or password.*verify the email or link Google from Profile/)
+      message: expect.stringMatching(/phone number or password.*verify the email or link Google from Profile.*Create an account with this email and enter the code/)
     });
     const after = await prisma.user.findUniqueOrThrow({ where: { id: owner.id } });
     expect(after).toEqual(before); // no field changed (email, emailVerified, googleSub, updatedAt)
     expect(await prisma.user.count({ where: { googleSub: sub } })).toBe(0); // no split account
     expect(await prisma.emailRelease.count({ where: { fromUserId: owner.id } })).toBe(0);
+  });
+
+  it('PR Review #58 re-review: the copy\'s way out works (SIGNUP_EMAIL_VERIFY=on): verified signup frees the email, then Google links', async () => {
+    clock = new Date();
+    const email = addr('wayout');
+    const sq = await squatter(email);
+    const sub = `sub-${tag}-${++seq}`;
+    await expect(A.finishGoogleSignIn(sub, email, 'Owner')).rejects.toMatchObject({ code: 'GOOGLE_EMAIL_UNVERIFIED_OWNER' });
+    const start = await E.startEmailSignup({ email, password: 'password123', phone: phone() }, deps());
+    const made = await E.verifyEmailSignup(start.pendingId, lastCode(email)!, deps());
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: sq.id } })).email).toBeNull();
+    const g = await A.finishGoogleSignIn(sub, email, 'Owner');
+    expect(g.user).toMatchObject({ id: made.user.id, email, googleLinked: true });
+  });
+
+  it('PR Review #58 re-review: with SIGNUP_EMAIL_VERIFY off, one-step signup cannot free it (so the copy omits that step)', async () => {
+    const email = addr('wayoff');
+    await squatter(email);
+    process.env.SIGNUP_EMAIL_VERIFY = 'off';
+    try {
+      const r = await call('POST', '/api/auth/signup', { body: { email, password: 'password123', phone: phone() } });
+      expect(r.status).toBeGreaterThanOrEqual(400);
+      await expect(A.finishGoogleSignIn(`sub-${tag}-${++seq}`, email, 'G')).rejects.toMatchObject({
+        message: expect.not.stringMatching(/Create an account/)
+      });
+    } finally {
+      process.env.SIGNUP_EMAIL_VERIFY = 'on';
+    }
   });
 
   it('PR Review #58 (a): an existing Google profile without email does not take it from an unverified holder', async () => {
