@@ -35,6 +35,28 @@ describe(':4000 public listener', () => {
       expect(res.headers.get('content-type')).toBe(unknown.headers.get('content-type'));
     }
   });
+  it('Tester case 20: /api/admin/* 404 headers match an unknown route (Vary, ACAO) across methods and origins', async () => {
+    const pick = (r: Response) => {
+      const h: Record<string, string> = {};
+      r.headers.forEach((v, k) => { if (!['date', 'etag', 'content-length', 'connection', 'keep-alive', 'x-request-id'].includes(k)) h[k] = v; });
+      return { status: r.status, h, len: r.headers.get('content-length') };
+    };
+    for (const origin of [undefined, 'https://cutly.buzz', 'https://evil.example']) {
+      for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']) {
+        const headers: Record<string, string> = { ...secret(), 'content-type': 'application/json' };
+        if (origin) headers.origin = origin;
+        if (method === 'OPTIONS') headers['access-control-request-method'] = 'POST';
+        const body = ['GET', 'OPTIONS'].includes(method) ? undefined : '{}';
+        const u = await fetch(`${api}/api/nope`, { method, headers, body });
+        const a = await fetch(`${api}/api/admin/ping`, { method, headers, body });
+        expect(pick(a), `${method} ${origin}`).toEqual(pick(u));
+        expect(await a.text()).toBe(await u.text());
+        if (origin === 'https://cutly.buzz') expect(a.headers.get('access-control-allow-origin')).toBe(origin);
+        if (origin === 'https://cutly.buzz' && method !== 'OPTIONS') expect(a.headers.get('vary')).toMatch(/Origin/);
+      }
+    }
+  });
+
   it('XFF 127.0.0.1 does not open admin', async () => {
     const res = await fetch(`${api}/api/admin/ping`, { headers: { ...secret(), 'x-forwarded-for': '127.0.0.1' } });
     expect(res.status).toBe(404);

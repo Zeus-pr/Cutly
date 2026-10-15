@@ -111,8 +111,6 @@ export function isAdminPath(rawPath: string) {
   const p = rawPath.toLowerCase().replace(/\/{2,}/g, '/');
   return /^\/api\/admin(\/|$)/.test(p);
 }
-// T2-Q6: before CORS, body parsing and auth, so :4000 reveals nothing about admin.
-app.use((req, res, next) => (isAdminPath(req.path) ? notFound(req, res) : next()));
 const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:8081,http://127.0.0.1:8081,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,https://cutly.buzz,https://www.cutly.buzz')
   .split(',')
   .map((s) => s.trim())
@@ -129,6 +127,9 @@ app.use(
     }
   })
 );
+// T2-Q6: after CORS (so headers match any unknown route, Tester case 20) but before body
+// parsing and auth, so :4000 reveals nothing about admin.
+app.use((req, res, next) => (isAdminPath(req.path) ? notFound(req, res) : next()));
 app.use(express.json({ limit: '8mb' }));
 app.get('/health', (_req, res) =>
   res.json({
