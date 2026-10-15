@@ -430,6 +430,9 @@ export async function createBookingReview(
   if (!booking) throw new Error('Booking not found.');
   if (booking.status !== 'COMPLETED') throw new Error('You can review only after the visit is completed.');
   if (booking.review) throw new Error('You already reviewed this visit.');
+  // T3 case 36: no new reviews for a closed (or paused) shop.
+  const shopRow = await prisma.shop.findUnique({ where: { id: booking.shopId }, select: { status: true, deletedAt: true } });
+  if (shopRow?.status !== 'ACTIVE' || shopRow.deletedAt) throw SHOP_CLOSED();
 
   const review = await prisma.$transaction(async (tx) => {
     const created = await tx.review.create({
@@ -834,6 +837,12 @@ export async function createHold(
   try {
     hold = await prisma.$transaction(async (tx) => {
       const now = new Date();
+      // T3 case 39: lock the shop row (FOR SHARE) so a concurrent partner delete, which
+      // UPDATEs the shop to CLOSED and releases its holds, either waits for this hold or
+      // makes it fail here. No orphan hold can stay on a CLOSED shop.
+      const live = await tx.$queryRaw<{ status: string }[]>`
+        SELECT status::text AS status FROM "Shop" WHERE id = ${input.shopId} FOR SHARE`;
+      if (live[0]?.status !== 'ACTIVE') throw SHOP_CLOSED();
       await tx.bookingHold.deleteMany({ where: { expiresAt: { lte: now } } });
 
       const shopBusy: TimeWindow[] = [
@@ -1493,7 +1502,8 @@ function serializeBooking(booking: NonNullable<Awaited<ReturnType<typeof loadBoo
   const canReschedule = confirmedUpcoming;
   const refundOnCancel = awaiting || (confirmedUpcoming && policy.refundAdvance);
   const hasReview = Boolean(booking.review);
-  const canReview = booking.status === 'COMPLETED' && !hasReview;
+  // T3 case 36: reviews only while the shop is ACTIVE.
+  const canReview = booking.status === 'COMPLETED' && !hasReview && booking.shop.status === 'ACTIVE' && !booking.shop.deletedAt;
   const { remainingPaise, balanceSettled } = bookingBalance(booking);
   const lat = toNum(booking.shop.latitude as never);
   const lng = toNum(booking.shop.longitude as never);

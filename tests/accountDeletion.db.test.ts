@@ -296,6 +296,35 @@ suite('T3 delete account (database)', () => {
     await expect(partnerSignUp(email, 'password123')).rejects.toMatchObject({ status: 409, code: 'ACCOUNT_PENDING_DELETION' });
   });
 
+  it('Tester cases 36 + 39: no reviews at a closed shop; partner delete releases holds', async () => {
+    const email = `${tag}-c36@example.com`;
+    const partner = await prisma.partner.create({ data: { email, passwordHash: await bcrypt.hash('password123', 4) } });
+    const ptoken = signToken({ id: partner.id, email, phone: null, name: null }, 'partner', 0);
+    const { shop, barber } = await seedShop('c36', partner.id);
+    const customer = await prisma.user.create({ data: { phone: `+9192${String(Date.now()).slice(-8)}` } });
+    const ctoken = signToken({ id: customer.id, email: null, phone: customer.phone, name: null }, 'customer', 0);
+    const visit = await seedBooking(customer.id, shop.id, barber.id, 'COMPLETED', new Date(Date.now() - 86_400_000));
+    const hold = await prisma.bookingHold.create({
+      data: {
+        userId: customer.id, shopId: shop.id, barberId: barber.id,
+        startsAt: new Date(Date.now() + 2 * 86_400_000), endsAt: new Date(Date.now() + 2 * 86_400_000 + 1_800_000),
+        expiresAt: new Date(Date.now() + 600_000), idempotencyKey: `${tag}-hold-c39`
+      }
+    });
+    const before = await call('GET', `/api/bookings/${visit.id}`, { token: ctoken });
+    expect(before.body.data.canReview).toBe(true);
+
+    const re = await call('POST', '/api/partner/reauth', { token: ptoken, body: { password: 'password123' } });
+    expect((await call('DELETE', '/api/partner/account', { token: ptoken, reauth: re.body.data.reauthToken })).status).toBe(200);
+    expect(await prisma.bookingHold.findUnique({ where: { id: hold.id } })).toBeNull();
+
+    const after = await call('GET', `/api/bookings/${visit.id}`, { token: ctoken });
+    expect(after.body.data.canReview).toBe(false);
+    const review = await call('POST', `/api/bookings/${visit.id}/review`, { token: ctoken, body: { shopRating: 5, barberRating: 5, text: 'x' } });
+    expect(review).toMatchObject({ status: 410, body: { code: 'SHOP_CLOSED' } });
+    expect(await prisma.review.count({ where: { bookingId: visit.id } })).toBe(0);
+  });
+
   it('adminApp is importable and answers without a listener', async () => {
     const s = adminApp.listen(0, '127.0.0.1');
     await new Promise((r) => s.once('listening', r));
