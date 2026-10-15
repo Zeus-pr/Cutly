@@ -8,7 +8,7 @@ import { isLoopback, loadTrustedProxies, normalizeIp } from './clientIp';
  *   NODE_ENV=development. LAN peers are still never trusted for CF-Connecting-IP.
  * - The admin listener is always 127.0.0.1.
  */
-export function resolveListenConfig(env: NodeJS.ProcessEnv = process.env) {
+export function resolveListenConfig(env: Record<string, string | undefined> = process.env) {
   loadTrustedProxies(env.TRUSTED_PROXY_CIDRS);
   const host = (env.HOST || '127.0.0.1').trim();
   const norm = host === 'localhost' ? '127.0.0.1' : normalizeIp(host);
