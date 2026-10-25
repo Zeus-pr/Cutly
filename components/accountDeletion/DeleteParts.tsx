@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, AppState, BackHandler, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from 'expo-router';
+import { usePreventRemove } from 'expo-router';
 import Svg, { Circle } from 'react-native-svg';
 import { PressScale } from '@/components/PressScale';
 import { fontFamily } from '@/constants/fonts';
@@ -311,16 +311,20 @@ export async function freshGoogleIdToken(): Promise<string | null> {
  * Returns the guarded `leave` for the Done button.
  */
 export function useLeaveLock(locked: boolean, leave: () => void): () => void {
-  const navigation = useNavigation();
   const leaveRef = useRef(leave);
   leaveRef.current = leave;
   const leavingRef = useRef(false);
+  // SDK 58 / React Navigation 8 dropped the 'beforeRemove' event; usePreventRemove replaces it.
+  const disablePreventionRef = useRef<() => void>(() => {});
 
   const run = useCallback(() => {
     if (leavingRef.current) return;
     leavingRef.current = true;
+    disablePreventionRef.current();
     leaveRef.current();
   }, []);
+
+  disablePreventionRef.current = usePreventRemove(locked, () => run());
 
   useEffect(() => {
     if (!locked) return;
@@ -328,16 +332,10 @@ export function useLeaveLock(locked: boolean, leave: () => void): () => void {
       run();
       return true;
     });
-    const unsub = navigation.addListener('beforeRemove', (e) => {
-      if (leavingRef.current) return;
-      e.preventDefault();
-      run();
-    });
     return () => {
       back.remove();
-      unsub();
     };
-  }, [locked, navigation, run]);
+  }, [locked, run]);
 
   return run;
 }

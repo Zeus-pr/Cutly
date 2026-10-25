@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,7 +20,7 @@ const pointers = [
 export default function Welcome() {
   const colors = useColors();
   const styles = useThemedStyles(welcomeStyles);
-  const pager = useRef<ScrollView>(null);
+  const pager = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const left = useRef(false);
   const [page, setPage] = useState(0);
   const [manual, setManual] = useState(false);

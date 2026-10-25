@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -59,7 +60,7 @@ export default function SearchScreen() {
   const [debounced, setDebounced] = useState(initialQ.trim());
   const [tab, setTab] = useState<SearchTab>('places');
   const [tabLayouts, setTabLayouts] = useState<Record<string, { x: number; width: number }>>({});
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const cell = tileSize();
   const active = usePlaceStore((state) => state.active);
   const lat = active?.latitude ?? DEFAULT_PLACE.latitude;

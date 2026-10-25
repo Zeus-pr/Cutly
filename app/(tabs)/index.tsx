@@ -1,3 +1,4 @@
+import type React from 'react';
 import { appConfirm } from '@/store/useDialogStore';
 import { useQuery } from '@tanstack/react-query';
 import { router, useFocusEffect } from 'expo-router';
@@ -70,7 +71,7 @@ export default function Home() {
 
 function HomeBody() {
   const colors = useColors();
-  const promoRef = useRef<ScrollView>(null);
+  const promoRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const promoIndex = useRef(0);
   const [promoW, setPromoW] = useState(0);
   const [promoPage, setPromoPage] = useState(0);
@@ -126,7 +127,7 @@ function HomeBody() {
   const tuckedOn = useSharedValue(0);
   const scrollY = useSharedValue(0);
   const leafH = useSharedValue(360);
-  const searchRef = useRef<View>(null);
+  const searchRef = useRef<React.ComponentRef<typeof View>>(null);
   const catRef = useRef<LottieView>(null);
   const catPhase = useRef<'rise' | 'eyes' | 'sink' | 'down'>('rise');
   const sinkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
