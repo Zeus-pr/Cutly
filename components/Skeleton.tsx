@@ -37,6 +37,7 @@ export function SkeletonBone({ width = '100%', height = 14, radius = radii.sm, s
     <MotiView
       from={{ opacity: 0.45 }}
       animate={{ opacity: 1 }}
+      // @ts-expect-error moti 0.30 typings vs reanimated 4.7 (SDK 58); runtime is fine
       transition={{
         type: 'timing',
         duration: 900,

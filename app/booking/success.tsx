@@ -38,12 +38,14 @@ export default function BookingSuccess() {
         <MotiView
           from={{ scale: 0.4, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
+          // @ts-expect-error moti 0.30 typings vs reanimated 4.7 (SDK 58); runtime is fine
           transition={{ type: 'spring', damping: 12, stiffness: 160 }}
           style={styles.badge}
         >
           <MotiView
             from={{ scale: 0.6, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
+            // @ts-expect-error moti 0.30 typings vs reanimated 4.7 (SDK 58); runtime is fine
             transition={{ type: 'timing', duration: 320, delay: 180 }}
           >
             <Ionicons name="checkmark" size={56} color={lightColors.white} />
@@ -52,6 +54,7 @@ export default function BookingSuccess() {
         <MotiView
           from={{ opacity: 0, translateY: 12 }}
           animate={{ opacity: 1, translateY: 0 }}
+          // @ts-expect-error moti 0.30 typings vs reanimated 4.7 (SDK 58); runtime is fine
           transition={{ type: 'timing', duration: 360, delay: 220 }}
         >
           <Text style={styles.title}>Appointment requested</Text>
