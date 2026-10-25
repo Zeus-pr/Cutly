@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import {
   Pressable,
@@ -52,7 +53,7 @@ export function CodeSlots({
 }: Props) {
   const colors = useColors();
   const styles = useThemedStyles(slotStyles);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const [focused, setFocused] = useState(false);
   const digits = value.replace(/\D/g, '').slice(0, length).split('');
 

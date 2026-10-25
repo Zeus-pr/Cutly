@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -73,7 +74,7 @@ export default function ShopDetail() {
   const cell = tileWidth();
 
   // Single scrolling page: tab press scrolls to its section; scrolling updates the active tab.
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const sectionY = useRef<Partial<Record<ShopTab, number>>>({});
   const tabsHeight = useRef(48);
   const scrollLock = useRef<ReturnType<typeof setTimeout> | null>(null);

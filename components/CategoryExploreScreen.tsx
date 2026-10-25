@@ -104,7 +104,7 @@ export function CategoryExploreScreen({ categoryId = 'salons', showBack, allShop
       <FlatList
         data={shops}
         keyExtractor={(item) => item.id}
-        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.accent} />}
+        refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={() => void refetch()} tintColor={colors.accent} />}
         contentContainerStyle={styles.content}
         ListHeaderComponent={
           <View>

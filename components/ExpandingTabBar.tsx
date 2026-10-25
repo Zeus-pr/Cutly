@@ -33,14 +33,13 @@ type Route = { key: string; name: string };
 type Props = {
   state: { index: number; routes: Route[] };
   descriptors: Record<string, { options: { title?: string } }>;
-  navigation: {
-    emit: (event: { type: 'tabPress'; target: string; canPreventDefault: true }) => { defaultPrevented: boolean };
-    navigate: (name: string) => void;
-  };
+  // React Navigation 8 (SDK 58): custom tab bars get `emitter` + `navigateToTab(routeKey)` instead of `navigation`.
+  emitter: { emit: (event: { type: 'tabPress'; target: string; canPreventDefault: true }) => { defaultPrevented: boolean } };
+  navigateToTab: (routeKey: string) => void;
   insets: { bottom: number };
 };
 
-export function ExpandingTabBar({ state, descriptors, navigation, insets }: Props) {
+export function ExpandingTabBar({ state, descriptors, emitter, navigateToTab, insets }: Props) {
   const colors = useColors();
   const reduced = useReducedMotion();
   const routes = (state?.routes ?? []).filter((route) => route?.name && !route.name.startsWith('_'));
@@ -94,11 +93,11 @@ export function ExpandingTabBar({ state, descriptors, navigation, insets }: Prop
   const labelStyle = useAnimatedStyle(() => ({ opacity: labelOpacity.get() }));
 
   const onPress = (route: Route, focused: boolean) => {
-    const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
+    const event = emitter.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
     if (focused || event.defaultPrevented) return;
     void Haptics.selectionAsync();
     if (!reduced) labelOpacity.set(0);
-    navigation.navigate(route.name);
+    navigateToTab(route.key);
   };
 
   const tabIndex = state?.index ?? 0;

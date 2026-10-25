@@ -3,7 +3,7 @@ import 'react-native-gesture-handler';
 import * as SecureStore from 'expo-secure-store';
 import * as SplashScreen from 'expo-splash-screen';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { StatusBar as NativeStatusBar, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router';
 import { dropExpiredSession, refreshProfile } from '@/services/auth';
@@ -246,9 +246,6 @@ export default function Layout() {
           style={
             showBoot ? 'light' : dark || (signedIn && !onHomeRoute) ? 'light' : 'dark'
           }
-        />
-        <NativeStatusBar
-          backgroundColor={showBoot ? LAUNCH_BG : signedIn && !onHomeRoute ? ACCENT : colors.canvas}
         />
         <SessionGate bootDone={bootDone} />
         {typeReady ? (

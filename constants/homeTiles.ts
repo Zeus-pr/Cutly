@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import type { ImageSourcePropType } from 'react-native';
+import type { ImageProps } from 'expo-image';
 
 export type HomeServiceTile = {
   id: string;
@@ -15,7 +15,7 @@ export type HomeServiceTile = {
   icon: ComponentProps<typeof Ionicons>['name'];
   tint: string;
   /** Optional illustration — set when you provide an SVG/PNG under assets/home-tiles. */
-  image?: ImageSourcePropType;
+  image?: ImageProps['source'];
 };
 
 /**

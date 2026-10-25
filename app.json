@@ -8,12 +8,6 @@
     "icon": "./assets/cutly-icon.png",
     "scheme": "cutly",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-blank.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#F06B55"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.cutly.app",
@@ -67,7 +61,14 @@
           "photosPermission": "CUTLY uses your photos on the shop page."
         }
       ],
-      "expo-splash-screen",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-blank.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#F06B55"
+        }
+      ],
       "expo-status-bar",
       "@react-native-community/datetimepicker",
       [
